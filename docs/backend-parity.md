@@ -51,6 +51,13 @@ OptiX launches. Unsupported scenes/devices must fail rather than silently enter 
 ordinary Warp path. Near-coincident surface hit ordering can differ between traversal
 backends. The canonical scene and analytical trajectory are shared unchanged.
 
+RGB processing preserves the fixed 0.85 OpenGL gamma, 0.42 Warp exposure, and
+Mitsuba firefly/filmic/sRGB response. These operations run on CUDA before final
+RGB8 readback on GPU hosts. Warp now defaults to native resolution; optional
+supersampling averages exposed, quantized subpixels on device (box reconstruction),
+replacing the previous CPU Lanczos filter. This changes only antialiasing, not the scene.
+The CUDA tiled compositor uses NVDEC/overlay_cuda/NVENC with a static label atlas.
+
 ## AOV synchronization
 
 ovrtx supports normalized `depth`, `normals`, `albedo`, `semantic`, and `instance`

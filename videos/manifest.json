@@ -1,11 +1,33 @@
 {
   "schema_version": 1,
   "scene": "fr3_renderer_evaluation",
-  "resolution": [1280, 720],
+  "generated_date": "2026-11-15",
+  "resolution": [
+    1280,
+    720
+  ],
   "video_fps": 24,
   "recording_duration_seconds": 30.0,
+  "path_tracing_samples": 32,
+  "warp_supersample": 1,
   "trajectory": "canonical close two-orbit multi-view sequence",
+  "hardware": {
+    "gpu": "NVIDIA L4",
+    "driver": "595.99.02"
+  },
+  "composition": "CUDA NVDEC / overlay_cuda / NVENC",
   "runtime_versions": {
+    "blender": "5.3.0",
+    "mitsuba": "3.9.1",
+    "mujoco": "4.0.1",
+    "mujoco_warp": "4.0.1",
+    "warp": "1.19.0",
+    "warp_optix": "0.3.0",
+    "mujoco_warp_optix_commit": "cafb631fbda1ff69ef9db0bd6c6bc57896dc889d",
+    "ovrtx": "0.7.0.1794596436",
+    "ovstage": "0.4.0.1794520352"
+  },
+  "historical_cosmos_runtime_versions": {
     "blender": "5.1.2",
     "cosmos_model": "nvidia/Cosmos3-Super",
     "cosmos_model_revision": "e0262be9d8f7586bc24c069a2aed2b665bdff266",
@@ -16,23 +38,96 @@
     "ovstage": "0.1.0.346039"
   },
   "artifacts": {
-    "all_tiled.mp4": {
-      "backend": "all",
-      "bytes": 42976244,
-      "duration": 30.0,
-      "fps": 24.0,
+    "mujoco_opengl.mp4": {
       "frames": 720,
-      "sha256": "6b6b1aa0e0e7d4e07418a48d5b648663e69e02f044fca7a68d3f9aa1c9167984",
-      "size": [3840, 1440]
+      "fps": 24.0,
+      "duration": 30.0,
+      "size": [
+        1280,
+        720
+      ],
+      "bytes": 12331399,
+      "sha256": "8874036505ccba09135b6c7ca78866241d2f6af72f1be4f51a71a0bf268578d8",
+      "backend": "opengl",
+      "regenerated": true
+    },
+    "mujoco_warp.mp4": {
+      "frames": 720,
+      "fps": 24.0,
+      "duration": 30.0,
+      "size": [
+        1280,
+        720
+      ],
+      "bytes": 15460730,
+      "sha256": "b54d5e26a6fbfbe41b707fac8eb796db32966c271f59100b004a30d8f31412ab",
+      "backend": "warp",
+      "regenerated": true
+    },
+    "mujoco_warp_optix.mp4": {
+      "frames": 720,
+      "fps": 24.0,
+      "duration": 30.0,
+      "size": [
+        1280,
+        720
+      ],
+      "bytes": 15454715,
+      "sha256": "4cc90c22cc037d1ee4a8c7e7e92647898e26634dd8075c511ea1f154f331cb9b",
+      "backend": "warp-optix",
+      "regenerated": true
     },
     "blender.mp4": {
-      "backend": "blender",
-      "bytes": 14218182,
-      "duration": 30.0,
-      "fps": 24.0,
       "frames": 720,
-      "sha256": "395232c95f0af5011e534235934aa3debc4ad073503478a41c5acdc59d3c88cd",
-      "size": [1280, 720]
+      "fps": 24.0,
+      "duration": 30.0,
+      "size": [
+        1280,
+        720
+      ],
+      "bytes": 14496645,
+      "sha256": "cecc818675f8763a9d41d2c4145a98b1dce23d3b60559a6a5da7379f1f93078c",
+      "backend": "blender",
+      "regenerated": true
+    },
+    "ovrtx.mp4": {
+      "frames": 720,
+      "fps": 24.0,
+      "duration": 30.0,
+      "size": [
+        1280,
+        720
+      ],
+      "bytes": 21022928,
+      "sha256": "f08491fcec13fe07724eae2936a2aacd67918fceab168351e5e8bad1d5d9ee35",
+      "backend": "ovrtx",
+      "regenerated": true
+    },
+    "mitsuba.mp4": {
+      "frames": 720,
+      "fps": 24.0,
+      "duration": 30.0,
+      "size": [
+        1280,
+        720
+      ],
+      "bytes": 22342539,
+      "sha256": "854da5c8579a74aa9af0a88ebe2027b51ff45fd06cd9987926b06984b72f358c",
+      "backend": "mitsuba",
+      "regenerated": true
+    },
+    "all_tiled.mp4": {
+      "frames": 720,
+      "fps": 24.0,
+      "duration": 30.0,
+      "size": [
+        3840,
+        1440
+      ],
+      "bytes": 114837337,
+      "sha256": "751b9ca8e7a446a57790f3ee931d887fb5baf8d3c211d922c90355c612654bcc",
+      "backend": "all",
+      "regenerated": true
     },
     "cosmos3_super_depth.mp4": {
       "backend": "cosmos3",
@@ -41,43 +136,40 @@
       "fps": 24.0,
       "frames": 121,
       "sha256": "8b9f39f21f516b929852fa78024fcd28e07b32d71ab66b87758ab1dbfc821cb5",
-      "size": [1280, 720]
+      "size": [
+        1280,
+        720
+      ],
+      "regenerated": false,
+      "provenance": "Retained historical Cosmos 3 example"
     },
-    "mitsuba.mp4": {
-      "backend": "mitsuba",
-      "bytes": 21335110,
-      "duration": 30.0,
+    "cosmos3_super_depth_conditioning/depth.mp4": {
+      "backend": "cosmos3-conditioning",
+      "regenerated": false,
+      "provenance": "Retained conditioning for the historical Cosmos 3 example",
+      "bytes": 435602,
+      "duration": 5.04,
       "fps": 24.0,
-      "frames": 720,
-      "sha256": "e9c149e72d984ccdaaf86cf4b06886d55757a083c9a885c40f9ab7fdb8f580ce",
-      "size": [1280, 720]
+      "frames": 121,
+      "sha256": "725921ce26dd27596729d38ff056985bdb05b41cc929e868e6dead23ccf39443",
+      "size": [
+        1280,
+        720
+      ]
     },
-    "mujoco_opengl.mp4": {
-      "backend": "opengl",
-      "bytes": 13145196,
-      "duration": 30.0,
+    "cosmos3_super_depth_conditioning/input.mp4": {
+      "backend": "cosmos3-conditioning",
+      "regenerated": false,
+      "provenance": "Retained conditioning for the historical Cosmos 3 example",
+      "bytes": 128950,
+      "duration": 0.04,
       "fps": 24.0,
-      "frames": 720,
-      "sha256": "967ce186e704040667dd8cfbb08771196a2f69764d279b1edc884ca73fb2194c",
-      "size": [1280, 720]
-    },
-    "mujoco_warp.mp4": {
-      "backend": "warp",
-      "bytes": 17702587,
-      "duration": 30.0,
-      "fps": 24.0,
-      "frames": 720,
-      "sha256": "ec6f768712a22d135f5eb84f2fd087c2cbd4c3bca0c629542e3e21c37b7797e2",
-      "size": [1280, 720]
-    },
-    "ovrtx.mp4": {
-      "backend": "ovrtx",
-      "bytes": 20155363,
-      "duration": 30.0,
-      "fps": 24.0,
-      "frames": 720,
-      "sha256": "6dff6e076ea8f62ecc281fdbdd2820914c6c5dd9217139eb6b3cfad89642ca05",
-      "size": [1280, 720]
+      "frames": 1,
+      "sha256": "5e0de8325a9c8e5edaa1998abadae73ba4963fe4ae858eb299364ed709c2a9f6",
+      "size": [
+        1280,
+        720
+      ]
     }
   }
 }

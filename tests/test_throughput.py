@@ -82,8 +82,14 @@ def test_ovrtx_benchmark_maps_full_product_path(monkeypatch, path):
     frame = SimpleNamespace(
         render_vars={path + "/LdrColor": SimpleNamespace(map=lambda device: mapping)}
     )
-    monkeypatch.setitem(sys.modules, "ovrtx", SimpleNamespace(Device=SimpleNamespace(CPU="cpu")))
-    monkeypatch.setattr(np, "from_dlpack", lambda mapping: np.full((2, 3, 4), 7, dtype=np.uint8))
+    import warp as wp
+
+    monkeypatch.setitem(sys.modules, "ovrtx", SimpleNamespace(Device=SimpleNamespace(CUDA="cuda")))
+    monkeypatch.setattr(
+        wp,
+        "from_dlpack",
+        lambda mapping: wp.array(np.full((2, 3, 4), 7, dtype=np.uint8), dtype=wp.uint8),
+    )
 
     shapes, checksum = throughput._map_ovrtx_product(SimpleNamespace(frames=[frame]), path)
 

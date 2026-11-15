@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = "==3.12.*"
 resolution-markers = [
     "platform_machine == 'x86_64' and sys_platform == 'linux'",
@@ -22,7 +22,7 @@ name = "mitsuba"
 version = "3.9.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "drjit" },
+    { name = "drjit", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/e7/4ddd6ff024d1b07d85c693201ef0e367906fb8c7378ec3508b21b95e3bd3/mitsuba-3.9.1-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:67d9cea9e0ee75295ad3692ef12360e285e679be01e8ff1997ef4c38925f5a13", size = 62576170, upload-time = "2026-08-07T10:45:12.924Z" },
@@ -55,9 +55,10 @@ name = "robotic-renderers-mitsuba-runtime"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "mitsuba" },
-    { name = "numpy" },
-    { name = "pillow" },
+    { name = "mitsuba", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "pillow", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "warp-lang", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 
 [package.metadata]
@@ -65,4 +66,16 @@ requires-dist = [
     { name = "mitsuba", specifier = "==3.9.1" },
     { name = "numpy", specifier = ">=2.5.4,<3" },
     { name = "pillow", specifier = ">=13,<14" },
+    { name = "warp-lang", specifier = "==1.19.0" },
+]
+
+[[package]]
+name = "warp-lang"
+version = "1.19.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/17/e9/7da1fc1cd4b677477cc0d232351a9567dd69f45709da5600a91961e36eeb/warp_lang-1.19.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:c797f5f4aa9925f676e20dd28e5416fee794499f3f3c0a5b66f2d4dfc2de9e32", size = 149277474, upload-time = "2026-11-02T04:44:08.599Z" },
 ]

@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 import mujoco
-import numpy as np
+import warp as wp
 
 from robotic_renderers.defaults import (
     DEFAULT_HEIGHT,
@@ -16,6 +16,7 @@ from robotic_renderers.defaults import (
     DEFAULT_WIDTH,
 )
 from robotic_renderers.media import display_frames, image_digest, write_png, write_video
+from robotic_renderers.pixels import gamma_rgb, read_rgb, rgb_buffer, rgb_host_buffer
 from robotic_renderers.scene import (
     CAMERA_NAME,
     create_model_and_data,
@@ -48,11 +49,15 @@ def create_renderer(
     option.geomgroup[:] = 0
     option.geomgroup[:3] = 1
     renderer = mujoco.Renderer(model, height=height, width=width)
+    rgb = rgb_buffer(width, height)
     return {
         "model": model,
         "data": data,
         "option": option,
         "renderer": renderer,
+        "rgb_input": wp.empty_like(rgb),
+        "rgb": rgb,
+        "rgb_host": rgb_host_buffer(rgb),
         "width": width,
         "height": height,
     }
@@ -82,11 +87,18 @@ def render_context_frame(context: dict[str, object], time_s: float = 0.0):
     set_scene_time(model, data, time_s)
     renderer.update_scene(data, camera=CAMERA_NAME, scene_option=context["option"])
     enable_quality_flags(renderer)
-    image = renderer.render().copy()
+    image = renderer.render()
     # Lift OpenGL's shadow-heavy framebuffer response to the common reference
     # without changing highlights or the authored light intensities.
-    corrected = np.power(image.astype(np.float32) / 255.0, OPENGL_OUTPUT_GAMMA)
-    return np.rint(corrected * 255.0).astype(np.uint8)
+    context["rgb_input"].assign(image)
+    wp.launch(
+        gamma_rgb,
+        dim=context["rgb"].shape,
+        inputs=[context["rgb_input"], OPENGL_OUTPUT_GAMMA],
+        outputs=[context["rgb"]],
+        device=context["rgb"].device,
+    )
+    return read_rgb(context["rgb"], context["rgb_host"])
 
 
 def render_frame(

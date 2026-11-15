@@ -25,7 +25,7 @@ from robotic_renderers.defaults import (
     DEFAULT_WIDTH,
     cache_directory,
 )
-from robotic_renderers.media import resize_rgb, write_video
+from robotic_renderers.media import atomic_output_path, write_video
 from robotic_renderers.processes import terminate_and_reap, wait_fail_fast
 from robotic_renderers.registry import backend_names, backend_spec, backend_titles, load_backend
 
@@ -67,22 +67,53 @@ def _add_title(image: Image.Image, title: str, font) -> None:
     )
 
 
+def _title_overlay(tile_width: int, tile_height: int) -> Image.Image:
+    font = _title_font(tile_height)
+    columns = math.ceil(math.sqrt(len(BACKEND_ORDER)))
+    rows = math.ceil(len(BACKEND_ORDER) / columns)
+    # Rasterize static typography once; frame compositing and alpha blending run on device.
+    overlay = Image.new("RGBA", (tile_width * columns, tile_height * rows))
+    for index, backend in enumerate(BACKEND_ORDER):
+        title = Image.new("RGBA", (tile_width, tile_height))
+        _add_title(title, BACKEND_TITLES[backend], font)
+        overlay.paste(title, ((index % columns) * tile_width, (index // columns) * tile_height))
+    separator = ImageDraw.Draw(overlay)
+    line_width = max(2, min(tile_width, tile_height) // 240)
+    for column in range(1, columns):
+        x = column * tile_width
+        separator.rectangle(
+            (x - line_width, 0, x + line_width, tile_height * rows), fill=(5, 6, 8, 255)
+        )
+    for row in range(1, rows):
+        y = row * tile_height
+        separator.rectangle(
+            (0, y - line_width, tile_width * columns, y + line_width), fill=(5, 6, 8, 255)
+        )
+    return overlay
+
+
 def tiled_frames(
     video_paths: dict[str, str | Path],
     frame_count: int,
     tile_width: int,
     tile_height: int,
 ) -> Iterable[np.ndarray]:
+    import warp as wp
+
+    from robotic_renderers.pixels import compose_tile, read_rgb, rgb_buffer, rgb_host_buffer
+
     readers = {
         backend: imageio.get_reader(Path(video_paths[backend]).expanduser().resolve())
         for backend in BACKEND_ORDER
     }
-    font = _title_font(tile_height)
+    overlay = _title_overlay(tile_width, tile_height)
     columns = math.ceil(math.sqrt(len(BACKEND_ORDER)))
-    rows = math.ceil(len(BACKEND_ORDER) / columns)
+    canvas = rgb_buffer(*overlay.size)
+    host = rgb_host_buffer(canvas)
+    device_overlay = wp.array(np.asarray(overlay), dtype=wp.uint8, device=canvas.device)
+    tiles = [rgb_buffer(tile_width, tile_height, device=canvas.device) for _ in BACKEND_ORDER]
     try:
         for frame_index in range(frame_count):
-            canvas = Image.new("RGB", (tile_width * columns, tile_height * rows), (5, 6, 8))
             for index, backend in enumerate(BACKEND_ORDER):
                 try:
                     frame = readers[backend].get_data(frame_index)
@@ -90,31 +121,126 @@ def tiled_frames(
                     raise RuntimeError(
                         f"{backend} ended before synchronized frame {frame_index + 1}"
                     ) from exc
-                frame = resize_rgb(frame, tile_width, tile_height)
-                tile = Image.fromarray(frame)
-                _add_title(tile, BACKEND_TITLES[backend], font)
+                if frame.shape != (tile_height, tile_width, 3):
+                    raise ValueError(f"{backend} frame has unexpected shape {frame.shape}")
+                tiles[index].assign(frame)
                 x = (index % columns) * tile_width
                 y = (index // columns) * tile_height
-                canvas.paste(tile, (x, y))
-
-            separator = ImageDraw.Draw(canvas)
-            line_width = max(2, min(tile_width, tile_height) // 240)
-            for column in range(1, columns):
-                x = column * tile_width
-                separator.rectangle(
-                    (x - line_width, 0, x + line_width, tile_height * rows),
-                    fill=(5, 6, 8),
+                wp.launch(
+                    compose_tile,
+                    dim=(tile_height, tile_width, 3),
+                    inputs=[tiles[index], device_overlay, x, y],
+                    outputs=[canvas],
+                    device=canvas.device,
                 )
-            for row in range(1, rows):
-                y = row * tile_height
-                separator.rectangle(
-                    (0, y - line_width, tile_width * columns, y + line_width),
-                    fill=(5, 6, 8),
-                )
-            yield np.asarray(canvas)
+            yield read_rgb(canvas, host)
     finally:
         for reader in readers.values():
             reader.close()
+
+
+def _compose_cuda(video_paths, output_path, frame_count, fps, tile_width, tile_height):
+    """NVDEC -> CUDA overlays -> NVENC, without downloading decoded video frames."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("CUDA composition requires system FFmpeg with CUDA filters and NVENC")
+    overlay = _title_overlay(tile_width, tile_height)
+    width, height = overlay.size
+    columns = math.ceil(math.sqrt(len(BACKEND_ORDER)))
+    started = time.perf_counter()
+    with tempfile.TemporaryDirectory(prefix="tiled-overlay-") as directory:
+        job = Path(directory)
+        # Text and its YUV palette are prepared once, then uploaded as immutable frames.
+        # No per-frame font rasterization, color conversion, or CPU blending.
+        for name, image, pixel_format in (
+            ("background", Image.new("RGB", overlay.size, (5, 6, 8)), "yuv420p"),
+            ("titles", overlay, "yuva420p"),
+        ):
+            image.save(job / f"{name}.png")
+            subprocess.run(
+                [
+                    ffmpeg,
+                    "-v",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(job / f"{name}.png"),
+                    "-frames:v",
+                    "1",
+                    "-pix_fmt",
+                    pixel_format,
+                    "-f",
+                    "rawvideo",
+                    str(job / f"{name}.raw"),
+                ],
+                check=True,
+            )
+        command = [ffmpeg, "-v", "error", "-y", "-filter_complex_threads", "1"]
+        for backend in BACKEND_ORDER:
+            command.extend(
+                [
+                    "-hwaccel",
+                    "cuda",
+                    "-hwaccel_output_format",
+                    "cuda",
+                    "-i",
+                    str(Path(video_paths[backend]).resolve()),
+                ]
+            )
+        count = len(BACKEND_ORDER)
+        for name, pixel_format in (("background", "yuv420p"), ("titles", "yuva420p")):
+            command.extend(
+                [
+                    "-stream_loop",
+                    "-1",
+                    "-f",
+                    "rawvideo",
+                    "-pixel_format",
+                    pixel_format,
+                    "-video_size",
+                    f"{width}x{height}",
+                    "-framerate",
+                    str(fps),
+                    "-i",
+                    str(job / f"{name}.raw"),
+                ]
+            )
+        filters = [f"[{count}:v]hwupload_cuda[base0]", f"[{count + 1}:v]hwupload_cuda[titles]"]
+        for index in range(count):
+            x = index % columns * tile_width
+            y = index // columns * tile_height
+            filters.append(f"[{index}:v]scale_cuda=format=yuv420p[tile{index}]")
+            filters.append(
+                f"[base{index}][tile{index}]overlay_cuda=x={x}:y={y}:shortest=1[base{index + 1}]"
+            )
+        filters.append(f"[base{count}][titles]overlay_cuda=shortest=1[video]")
+        with atomic_output_path(output_path) as (temporary, output):
+            command.extend(
+                [
+                    "-filter_complex",
+                    ";".join(filters),
+                    "-map",
+                    "[video]",
+                    "-frames:v",
+                    str(frame_count),
+                    "-r",
+                    str(fps),
+                    "-an",
+                    "-c:v",
+                    "h264_nvenc",
+                    "-preset",
+                    "p5",
+                    "-cq",
+                    "18",
+                    "-b:v",
+                    "0",
+                    "-movflags",
+                    "+faststart",
+                    str(temporary),
+                ]
+            )
+            subprocess.run(command, check=True)
+    return output, frame_count, time.perf_counter() - started
 
 
 def compose_tiled_video(
@@ -132,12 +258,20 @@ def compose_tiled_video(
     _validate_component_videos(video_paths, frame_count, fps, tile_width, tile_height)
     columns = math.ceil(math.sqrt(len(BACKEND_ORDER)))
     rows = math.ceil(len(BACKEND_ORDER) / columns)
-    output, written, seconds = write_video(
-        tiled_frames(video_paths, frame_count, tile_width, tile_height),
-        output_path,
-        fps=fps,
-        quality=6,
-    )
+    from robotic_renderers.pixels import pixel_device
+
+    device = pixel_device()
+    if device.is_cuda:
+        output, written, seconds = _compose_cuda(
+            video_paths, output_path, frame_count, fps, tile_width, tile_height
+        )
+    else:
+        output, written, seconds = write_video(
+            tiled_frames(video_paths, frame_count, tile_width, tile_height),
+            output_path,
+            fps=fps,
+            quality=6,
+        )
     return {
         "output": str(output),
         "frames": written,
@@ -150,6 +284,7 @@ def compose_tiled_video(
         "width": tile_width * columns,
         "height": tile_height * rows,
         "compose_seconds": seconds,
+        "compose_device": "CUDA/NVDEC/NVENC" if device.is_cuda else str(device),
     }
 
 

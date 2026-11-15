@@ -35,10 +35,10 @@ from robotic_renderers.media import (
     atomic_output_path,
     display_frames,
     image_digest,
-    resize_rgb,
     write_png,
     write_video,
 )
+from robotic_renderers.pixels import packed_rgb, read_rgb, rgb_host_buffer
 from robotic_renderers.processes import terminate_and_reap
 from robotic_renderers.remote import (
     UV_DISCOVERY_SCRIPT,
@@ -374,7 +374,7 @@ def _check_ray_backend(render_context, ray_backend: str) -> None:
 def create_renderer(
     width: int = DEFAULT_WIDTH,
     height: int = DEFAULT_HEIGHT,
-    supersample: int = 2,
+    supersample: int = 1,
     device: str | None = None,
     *,
     ray_backend: str = "warp",
@@ -418,7 +418,7 @@ def create_renderer(
         **backend_options,
     )
     _check_ray_backend(render_context, ray_backend)
-    rgb = wp.empty((1, render_height, render_width), dtype=wp.vec3)
+    rgb = wp.empty((1, height, width, 3), dtype=wp.uint8)
     return {
         "model": model,
         "host_data": host_data,
@@ -426,6 +426,7 @@ def create_renderer(
         "warp_data": warp_data,
         "render_context": render_context,
         "rgb": rgb,
+        "rgb_host": rgb_host_buffer(rgb),
         "device": device,
         "width": width,
         "height": height,
@@ -458,21 +459,29 @@ def render_context_frame(context: dict[str, object], time_s: float = 0.0) -> np.
     _copy_kinematics_to_warp(context)
     mjw.refit_bvh(context["warp_model"], context["warp_data"], context["render_context"])
     mjw.render(context["warp_model"], context["warp_data"], context["render_context"])
-    mjw.get_rgb(context["render_context"], 0, context["rgb"])
-    float_image = np.clip(
-        context["rgb"].numpy()[0] * WARP_EXPOSURE_SCALE,
-        0.0,
-        1.0,
+    rc = context["render_context"]
+    wp.launch(
+        packed_rgb,
+        dim=(1, context["height"], context["width"]),
+        inputs=[
+            rc.rgb_data,
+            rc.rgb_adr,
+            0,
+            context["render_width"],
+            context["supersample"],
+            WARP_EXPOSURE_SCALE,
+        ],
+        outputs=[context["rgb"]],
+        device=context["device"],
     )
-    image = np.rint(float_image * 255.0).astype(np.uint8)
-    return resize_rgb(image, context["width"], context["height"])
+    return read_rgb(context["rgb"], context["rgb_host"])[0]
 
 
 def render_frame_local(
     width: int = DEFAULT_WIDTH,
     height: int = DEFAULT_HEIGHT,
     time_s: float = 1.0,
-    supersample: int = 2,
+    supersample: int = 1,
     device: str | None = None,
     *,
     ray_backend: str = "warp",
@@ -487,7 +496,7 @@ def render_frame(
     width: int = DEFAULT_WIDTH,
     height: int = DEFAULT_HEIGHT,
     time_s: float = 1.0,
-    supersample: int = 2,
+    supersample: int = 1,
     host: str = DEFAULT_HOST,
     local: bool = True,
     *,
@@ -510,7 +519,7 @@ def render_still_local(
     width: int = DEFAULT_WIDTH,
     height: int = DEFAULT_HEIGHT,
     time_s: float = 1.0,
-    supersample: int = 2,
+    supersample: int = 1,
     device: str | None = None,
     *,
     ray_backend: str = "warp",
@@ -552,7 +561,7 @@ def record_video_local(
     fps: int = DEFAULT_VIDEO_FPS,
     width: int = DEFAULT_WIDTH,
     height: int = DEFAULT_HEIGHT,
-    supersample: int = 2,
+    supersample: int = 1,
     device: str | None = None,
     *,
     ray_backend: str = "warp",
@@ -675,7 +684,7 @@ def render_still(
     width: int = DEFAULT_WIDTH,
     height: int = DEFAULT_HEIGHT,
     time_s: float = 1.0,
-    supersample: int = 2,
+    supersample: int = 1,
     host: str = DEFAULT_HOST,
     local: bool = True,
     *,
@@ -724,7 +733,7 @@ def record_video(
     fps: int = DEFAULT_VIDEO_FPS,
     width: int = DEFAULT_WIDTH,
     height: int = DEFAULT_HEIGHT,
-    supersample: int = 2,
+    supersample: int = 1,
     host: str = DEFAULT_HOST,
     local: bool = True,
     *,
@@ -957,7 +966,7 @@ def _worker_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps", type=int, default=DEFAULT_VIDEO_FPS)
     parser.add_argument("--frames", type=int, default=30)
     parser.add_argument("--warmup", type=int, default=3)
-    parser.add_argument("--supersample", type=int, default=2)
+    parser.add_argument("--supersample", type=int, default=1)
     return parser
 
 

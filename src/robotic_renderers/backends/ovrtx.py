@@ -1814,6 +1814,29 @@ def benchmark(
     }
 
 
+def _map_rgb(frame, path: str) -> np.ndarray:
+    import ovrtx
+    import warp as wp
+
+    from robotic_renderers.pixels import copy_rgb, rgb_buffer
+
+    mapping = frame.render_vars[path].map(device=ovrtx.Device.CUDA)
+    try:
+        source = wp.from_dlpack(mapping)
+        height, width = source.shape[:2]
+        output = rgb_buffer(width, height, device=source.device)
+        wp.launch(
+            copy_rgb,
+            dim=output.shape,
+            inputs=[source],
+            outputs=[output],
+            device=source.device,
+        )
+        return output.numpy()
+    finally:
+        mapping.unmap()
+
+
 def _map_render_var(frame, path: str) -> np.ndarray | dict[str, np.ndarray]:
     import ovrtx
 
@@ -1945,12 +1968,12 @@ def _worker_frame(
         raise RuntimeError("ovrtx returned no camera frame")
     if index == 0:
         print("[robot-rendering] mapping first LdrColor frame", flush=True)
-    ldr_color = _map_render_var(product.frames[0], f"{bundle['render_product']}/LdrColor")
-    expected_shape = (bundle["height"], bundle["width"], 4)
-    if ldr_color.shape != expected_shape:
-        raise RuntimeError(f"ovrtx LdrColor has shape {ldr_color.shape}; expected {expected_shape}")
+    rgb = _map_rgb(product.frames[0], f"{bundle['render_product']}/LdrColor")
+    expected_shape = (bundle["height"], bundle["width"], 3)
+    if rgb.shape != expected_shape:
+        raise RuntimeError(f"ovrtx RGB has shape {rgb.shape}; expected {expected_shape}")
     outputs: dict[str, object] = {
-        "rgb": np.ascontiguousarray(ldr_color[:, :, :3]),
+        "rgb": rgb,
         "_labels": {},
     }
     aovs = tuple(bundle.get("aovs", ()))

@@ -25,6 +25,11 @@ backend's normal result API. For Warp, ovrtx, and Mitsuba it includes GPU-to-hos
 transfer. Renderer-call timing may also be reported when asynchronous mapping makes the
 distinction useful.
 
+Warp measurements now include device-side exposure/quantization and RGB8 readback,
+including the batched throughput path. Native resolution is the default; optional
+supersampling is GPU box-filtered before readback. Do not compare these timings to
+older recordings that downloaded float RGB and used CPU exposure and Lanczos resizing.
+
 The unified `--warmup` count is executed before measured frames. Blender builds one
 Cycles scene in its isolated process, renders the warmup frames to populate persistent
 data and shader state, and reports only the following frames in `render_seconds` and

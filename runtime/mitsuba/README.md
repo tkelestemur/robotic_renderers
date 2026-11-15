@@ -1,6 +1,8 @@
 # Mitsuba runtime
 
 This is the frozen Python environment used by the remote Mitsuba 3 backend.
+Warp kernels consume Mitsuba's CUDA tensors through DLPack for firefly filtering,
+tone mapping and RGB8 packing before readback.
 
 Create it on the rendering host with:
 

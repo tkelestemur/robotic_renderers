@@ -690,6 +690,8 @@ def _worker_configure_render(manifest, samples: int, live: bool):
             except Exception as exc:
                 print(f"Cycles {backend} unavailable: {exc}")
         scene.cycles.device = "GPU" if selected else "CPU"
+        if requested and selected is None:
+            raise RuntimeError(f"Requested Cycles device {requested} is unavailable")
         scene["robot_rendering_cycles_device"] = selected or "CPU"
         scene["robot_rendering_cycles_devices"] = selected_devices or ["CPU"]
         print(
@@ -710,6 +712,7 @@ def _worker_configure_render(manifest, samples: int, live: bool):
                 else ("OPENIMAGEDENOISE" if requested_denoiser == "AUTO" else requested_denoiser)
             )
             scene.cycles.denoiser = denoiser
+            scene.cycles.denoising_use_gpu = selected is not None
         scene.cycles.max_bounces = int(os.environ.get("BLENDER_MAX_BOUNCES", "12"))
         scene.cycles.diffuse_bounces = int(os.environ.get("BLENDER_DIFFUSE_BOUNCES", "6"))
         scene.cycles.glossy_bounces = int(os.environ.get("BLENDER_GLOSSY_BOUNCES", "8"))

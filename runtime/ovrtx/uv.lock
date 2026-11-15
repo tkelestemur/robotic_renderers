@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = "==3.12.*"
 resolution-markers = [
     "platform_machine == 'x86_64' and sys_platform == 'linux'",
@@ -37,9 +37,10 @@ name = "robotic-renderers-ovrtx-runtime"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "numpy" },
-    { name = "ovrtx" },
-    { name = "ovstage" },
+    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "ovrtx", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "ovstage", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "warp-lang", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 
 [package.metadata]
@@ -47,4 +48,16 @@ requires-dist = [
     { name = "numpy", specifier = "==2.5.4" },
     { name = "ovrtx", specifier = "==0.7.0.1794596436" },
     { name = "ovstage", specifier = "==0.4.0.1794520352" },
+    { name = "warp-lang", specifier = "==1.19.0" },
+]
+
+[[package]]
+name = "warp-lang"
+version = "1.19.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/17/e9/7da1fc1cd4b677477cc0d232351a9567dd69f45709da5600a91961e36eeb/warp_lang-1.19.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:c797f5f4aa9925f676e20dd28e5416fee794499f3f3c0a5b66f2d4dfc2de9e32", size = 149277474, upload-time = "2026-11-02T04:44:08.599Z" },
 ]

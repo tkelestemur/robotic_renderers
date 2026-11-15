@@ -2,6 +2,7 @@
 
 This environment pins the official NVIDIA ovrtx and ovstage Python
 distributions used by the remote Linux/RTX backend.
+Warp packs the mapped CUDA color product into RGB8 before host readback.
 
 Create it on the rendering host with:
 

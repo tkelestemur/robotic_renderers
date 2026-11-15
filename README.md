@@ -4,10 +4,14 @@ A research prototype comparing six rendering pipelines on one deterministic Fran
 FR3 scene. Geometry, robot motion, cameras, materials, and lighting originate in
 [`scene.py`](src/robotic_renderers/scene.py).
 
-[![Original five-backend comparison](videos/all_tiled_preview.gif)](videos/all_tiled.mp4)
+[![Six-backend comparison](videos/all_tiled_preview.gif)](videos/all_tiled.mp4)
 
-Select the preview for the original **30-second, 24 FPS, 3840x1440** comparison.
-Each tile is 1280x720. This example predates the `warp-optix` backend.
+Select the preview for the **30-second, 24 FPS, 3840x1440** comparison.
+Each tile is rendered at 1280x720, with 32 samples for path tracers and native
+resolution for Warp. The six refreshed clips are:
+[OpenGL](videos/mujoco_opengl.mp4), [Warp](videos/mujoco_warp.mp4),
+[Warp + OptiX](videos/mujoco_warp_optix.mp4), [Blender](videos/blender.mp4),
+[ovrtx](videos/ovrtx.mp4), and [Mitsuba](videos/mitsuba.mp4).
 
 ## Setup
 
@@ -77,7 +81,7 @@ uv run robotic-renderers still --backend blender --samples 256 \
   --output outputs/blender.png
 uv run robotic-renderers live --backend warp
 uv run robotic-renderers record --backend warp-optix \
-  --duration 60 --fps 60 --supersample 2 --output outputs/warp-optix.mp4
+  --duration 30 --fps 24 --supersample 1 --output outputs/warp-optix.mp4
 uv run robotic-renderers benchmark --backend all \
   --frames 3 --samples 32 --output outputs/benchmark.json
 ```
@@ -88,18 +92,49 @@ Recordings default to 30 seconds at 30 FPS. The camera follows a continuous
 `--samples` controls path tracers; `--supersample` controls both Warp backends.
 Ordinary Warp uses SSH only when `--remote-warp` is supplied.
 
+Warp defaults to native-resolution rendering (`--supersample 1`). On CUDA, its packed
+renderer output is converted directly to exposed RGB8 on the GPU; only the final
+image is downloaded. Optional supersampling uses GPU box filtering, rather than
+CPU Pillow resizing. A 1280x720 RGB readback is 2.8 MB, instead of the previous
+44.2 MB supersampled float image.
+
+The refreshed 720-frame recordings on an NVIDIA L4 (driver 595.99.02) measured:
+
+| Backend | Native 1280x720 render FPS¹ | Render + encode time |
+| --- | ---: | ---: |
+| OpenGL | 114.8 | 14.5 s |
+| Warp | 195.8 | 13.3 s |
+| Warp-optix | 344.7 | 13.0 s |
+
+¹Includes RGB processing/readback; excludes encoding, initialization and SSH.
+Playback is 24 FPS. These use `--supersample 1`; the older ~5.6 FPS recordings
+used 2x supersampling and CPU image processing.
+
+OpenGL's fixed gamma, Mitsuba's firefly filter/filmic conversion, and ovrtx's
+RGBA-to-RGB packing also run in device kernels. Mitsuba and ovrtx share their native
+CUDA buffers through DLPack. OpenGL's MuJoCo API still reads back its framebuffer
+before uploading it for gamma correction. Blender uses native Cycles color output
+and GPU denoising. Scene updates, static label preparation, file I/O and encoding
+remain host-side. CPU-only local checkouts execute the same Warp kernels on CPU.
+
 Render all six backends and compose a labeled comparison:
 
 ```bash
 uv run robotic-renderers record --backend all \
-  --duration 60 --fps 60 --width 1280 --height 720 \
-  --samples 256 --supersample 2 --keep-components \
-  --output outputs/all_tiled_60s_60fps.mp4
+  --duration 30 --fps 24 --width 1280 --height 720 \
+  --samples 32 --supersample 1 --keep-components \
+  --output outputs/all_tiled.mp4
 ```
 
 Dimensions apply to each tile, yielding a 3840x1440 video. Frame timing and labels
 are synchronized. For a quick smoke test, use `--duration 0.5 --fps 6 --width 320
 --height 180 --samples 4 --supersample 1`.
+
+On a CUDA machine, tiled composition uses system `ffmpeg` with NVDEC, `scale_cuda`,
+`overlay_cuda`, and NVENC. Decoded frames stay on the GPU through layout, label
+blending and encoding. Install an FFmpeg build with those NVIDIA features; a CUDA
+composition failure is reported rather than silently switching to CPU filters.
+Static labels are prepared once. CPU-only machines use the portable compositor.
 
 For multi-GPU throughput sweeps:
 
@@ -141,6 +176,9 @@ These differences, including exact light compensations, are documented in
 Cosmos 3 generatively enhances a rendered image/video or structural controls.
 Its output is separate from deterministic renderer comparisons. The preset needs
 a multi-GPU host; see [Cosmos notes](docs/cosmos3.md) for setup and commands.
+The existing `cosmos3_super_depth.mp4` and its conditioning directory are retained
+historical examples, not part of this regenerated comparison. Their original
+versions and provenance are recorded separately in `videos/manifest.json`.
 
 ## Working on the code
 
@@ -149,6 +187,7 @@ a multi-GPU host; see [Cosmos notes](docs/cosmos3.md) for setup and commands.
 - `cli.py`, `workflows/`: command orchestration and tiled/Cosmos workflows.
 - `benchmarks/`: throughput experiments.
 - `media.py`, `remote.py`, `processes.py`: encoding, SSH, and worker cleanup.
+- `pixels.py`: shared device-side RGB processing.
 
 These paths are under `src/robotic_renderers/`. Use small module-level functions
 and preserve equivalent scene inputs across backends.

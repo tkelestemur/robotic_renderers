@@ -1200,37 +1200,22 @@ def _worker_apply_frame(mi, runtime, index: int) -> None:
 
 
 def _worker_tonemap(image, exposure: float) -> np.ndarray:
-    linear = np.asarray(image, dtype=np.float32)
-    if linear.shape[-1] > 3:
-        linear = linear[:, :, :3]
-    # Point lights on glossy metallic surfaces can produce rare, extremely
-    # energetic single-pixel paths. Remove only isolated outliers before the
-    # filmic curve; coherent highlights and edges retain their local support.
-    height, width = linear.shape[:2]
-    padded = np.pad(linear, ((1, 1), (1, 1), (0, 0)), mode="edge")
-    neighbors = np.stack(
-        [
-            padded[y : y + height, x : x + width]
-            for y in range(3)
-            for x in range(3)
-            if (y, x) != (1, 1)
-        ],
-        axis=0,
+    import warp as wp
+
+    from robotic_renderers.pixels import filmic_rgb, rgb_buffer
+
+    # DLPack shares the CUDA tensor, including stream ordering, without float readback.
+    source = wp.from_dlpack(image)
+    height, width = source.shape[:2]
+    output = rgb_buffer(width, height, device=source.device)
+    wp.launch(
+        filmic_rgb,
+        dim=(height, width),
+        inputs=[source, exposure],
+        outputs=[output],
+        device=source.device,
     )
-    local_median = np.median(neighbors, axis=0)
-    luminance = linear @ np.asarray([0.2126, 0.7152, 0.0722], dtype=np.float32)
-    median_luminance = local_median @ np.asarray([0.2126, 0.7152, 0.0722], dtype=np.float32)
-    fireflies = (luminance > 5.0 * median_luminance + 1.0) & (np.max(linear, axis=2) > 8.0)
-    linear = np.where(fireflies[:, :, np.newaxis], local_median, linear)
-    linear = np.maximum(0.0, linear * float(exposure))
-    mapped = (linear * (2.51 * linear + 0.03)) / (linear * (2.43 * linear + 0.59) + 0.14)
-    mapped = np.clip(mapped, 0.0, 1.0)
-    srgb = np.where(
-        mapped <= 0.0031308,
-        12.92 * mapped,
-        1.055 * np.power(mapped, 1.0 / 2.4) - 0.055,
-    )
-    return np.ascontiguousarray(np.rint(srgb * 255.0).astype(np.uint8))
+    return output.numpy()
 
 
 def _worker_render_frame(mi, runtime, index: int) -> np.ndarray:

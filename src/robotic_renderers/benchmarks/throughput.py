@@ -249,6 +249,7 @@ def _opengl_process(
         os.environ["MUJOCO_GL"] = "egl"
         os.environ["PYOPENGL_PLATFORM"] = "egl"
         os.environ["MUJOCO_EGL_DEVICE_ID"] = str(gpu)
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
         import numpy as np
 
         from robotic_renderers.backends import mujoco_opengl as backend
@@ -270,7 +271,7 @@ def _opengl_process(
                     "worker": worker_index,
                     "gpu": gpu,
                     "seconds": seconds,
-                    "checksum": int(np.asarray(last, dtype=np.uint64).sum() % (2**32)),
+                    "checksum": int(np.asarray(last[0, 0], dtype=np.uint64).sum()),
                 }
             )
         finally:
@@ -442,7 +443,7 @@ def _create_warp_context(width: int, height: int, batch: int, ray_backend: str =
         "warp_model": warp_model,
         "warp_data": warp_data,
         "render_context": render_context,
-        "rgb": wp.empty((batch, height, width), dtype=wp.vec3),
+        "rgb": wp.empty((batch, height, width, 3), dtype=wp.uint8),
         "batch": batch,
         "np": np,
         "mjw": mjw,
@@ -451,6 +452,8 @@ def _create_warp_context(width: int, height: int, batch: int, ray_backend: str =
 
 
 def _warp_render(context: dict[str, object], time_s: float) -> None:
+    from robotic_renderers.backends.mujoco_warp import WARP_EXPOSURE_SCALE
+    from robotic_renderers.pixels import packed_rgb
     from robotic_renderers.scene import set_scene_time
 
     np = context["np"]
@@ -473,15 +476,22 @@ def _warp_render(context: dict[str, object], time_s: float) -> None:
     )
     mjw.refit_bvh(context["warp_model"], warp_data, context["render_context"])
     mjw.render(context["warp_model"], warp_data, context["render_context"])
-    mjw.get_rgb(context["render_context"], 0, context["rgb"])
+    rc = context["render_context"]
+    rgb = context["rgb"]
+    context["wp"].launch(
+        packed_rgb,
+        dim=rgb.shape[:3],
+        inputs=[rc.rgb_data, rc.rgb_adr, 0, rgb.shape[2], 1, WARP_EXPOSURE_SCALE],
+        outputs=[rgb],
+        device=rgb.device,
+    )
     context["wp"].synchronize()
 
 
 def _warp_readback(context: dict[str, object]) -> int:
     np = context["np"]
     pixels = context["rgb"].numpy()
-    corrected = np.rint(np.clip(pixels * 0.42, 0.0, 1.0) * 255.0).astype(np.uint8)
-    return int(corrected[:, 0, 0].astype(np.uint64).sum() % (2**32))
+    return int(pixels[:, 0, 0].astype(np.uint64).sum() % (2**32))
 
 
 def _warp_process(
@@ -892,20 +902,15 @@ def Scope "Render" {{
 
 def _map_ovrtx_product(product, render_product: str) -> tuple[list[list[int]], int]:
     import numpy as np
-    import ovrtx
+
+    from robotic_renderers.backends.ovrtx import _map_rgb
 
     shapes = []
     checksum = 0
     for frame in product.frames:
-        mapping = frame.render_vars[f"{render_product}/LdrColor"].map(device=ovrtx.Device.CPU)
-        try:
-            view = np.from_dlpack(mapping)
-            copied = np.ascontiguousarray(view[:, :, :3]).copy()
-            shapes.append(list(copied.shape))
-            checksum ^= int(copied[0, 0].astype(np.uint64).sum())
-            del view
-        finally:
-            mapping.unmap()
+        copied = _map_rgb(frame, f"{render_product}/LdrColor")
+        shapes.append(list(copied.shape))
+        checksum ^= int(copied[0, 0].astype(np.uint64).sum())
     return shapes, checksum
 
 
@@ -1101,7 +1106,7 @@ def _mitsuba_process(
             frame = backend._worker_tonemap(image, bundle["tone_exposure"])
             readback_seconds += time.perf_counter() - started
             output_shape = list(frame.shape)
-            pixel_sum = int(np.asarray(frame, dtype=np.uint64).sum() % (2**32))
+            pixel_sum = int(np.asarray(frame[0, 0], dtype=np.uint64).sum())
             checksum = (checksum * 16777619 + pixel_sum) % (2**32)
 
         expected_shape = [int(bundle["height"]), int(bundle["width"]), 3]

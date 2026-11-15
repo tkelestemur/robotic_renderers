@@ -694,9 +694,9 @@ def test_worker_advances_ovstage_time_and_renders_at_the_same_ordinal(monkeypatc
     monkeypatch.setitem(sys.modules, "ovrtx", fake_ovrtx)
     monkeypatch.setitem(sys.modules, "ovstage", fake_ovstage)
     monkeypatch.setattr(
-        np,
-        "from_dlpack",
-        lambda mapping: np.zeros((2, 3, 4), dtype=np.uint8),
+        render_ovrtx,
+        "_map_rgb",
+        lambda frame, path: np.zeros((2, 3, 3), dtype=np.uint8),
     )
     renderer = SimpleNamespace(step=step)
     stage = SimpleNamespace(advance_write_floor=advance_write_floor)
@@ -755,7 +755,7 @@ def test_worker_maps_rgb_and_annotations_by_full_product_path(monkeypatch, rende
             unmapped.append("/Render/Annotations/SemanticIdMap")
 
     def map_output(path, device):
-        assert device == "cpu"
+        assert device == ("cuda" if path == "/Render/Camera/LdrColor" else "cpu")
         if path.endswith("/SemanticIdMap"):
             return NamedMapping()
 
@@ -775,7 +775,13 @@ def test_worker_maps_rgb_and_annotations_by_full_product_path(monkeypatch, rende
         }
         return {product: SimpleNamespace(frames=[SimpleNamespace(render_vars=variables)])}
 
-    monkeypatch.setitem(sys.modules, "ovrtx", SimpleNamespace(Device=SimpleNamespace(CPU="cpu")))
+    import warp as wp
+
+    from_dlpack = wp.from_dlpack
+    monkeypatch.setitem(
+        sys.modules, "ovrtx", SimpleNamespace(Device=SimpleNamespace(CPU="cpu", CUDA="cuda"))
+    )
+    monkeypatch.setattr(wp, "from_dlpack", lambda mapping: from_dlpack(mapping.array))
     monkeypatch.setattr(np, "from_dlpack", lambda mapping: mapping.array)
     bundle = {
         "fps": 24,

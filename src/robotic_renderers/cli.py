@@ -83,7 +83,7 @@ def _add_remote_options(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_quality_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--supersample", type=_positive_int, default=2)
+    parser.add_argument("--supersample", type=_positive_int, default=1)
     parser.add_argument(
         "--samples",
         type=_positive_int,
