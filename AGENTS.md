@@ -2,13 +2,15 @@
 
 ## Project scope
 
-This repository compares rendering pipelines on one deterministic Franka FR3 robot
+This research prototype runs from a source checkout. Keep the code and tooling small;
+avoid adding release automation, distribution support, or application frameworks.
+It compares rendering pipelines on one deterministic Franka FR3 robot
 scene. Keep renderer inputs equivalent so that output differences reflect rendering
 quality, not different geometry, animation, cameras, materials, or lighting.
 
 The canonical environment is assembled with MuJoCo `MjSpec` in
 `src/robotic_renderers/scene.py`. The regular backends are MuJoCo OpenGL, MuJoCo Warp,
-Blender Cycles, remote NVIDIA ovrtx, and remote Mitsuba 3. Cosmos 3 is an optional
+Warp + OptiX, Blender Cycles, remote NVIDIA ovrtx, and remote Mitsuba 3. Cosmos 3 is an optional
 generative post-process, not another renderer.
 
 ## Development environment

@@ -17,7 +17,7 @@ license are retained at:
 - `third_party/mujoco_menagerie/LICENSE`
 - `third_party/mujoco_menagerie/franka_fr3/LICENSE`
 
-The wheel includes those model assets and license notices as package data.
+The scene reads those assets directly from the checkout.
 
 ## Python runtime dependencies
 
@@ -42,7 +42,7 @@ notices remain authoritative.
 ## External renderer applications and remote runtimes
 
 These components are installed or downloaded separately and are not redistributed in
-this repository or its Python wheel.
+this repository.
 
 ### Blender
 

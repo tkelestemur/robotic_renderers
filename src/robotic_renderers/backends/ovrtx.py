@@ -34,7 +34,7 @@ from robotic_renderers.geometry import (
 )
 from robotic_renderers.remote import (
     REMOTE_PACKAGE_EXCLUDES,
-    resolve_runtime_project,
+    UV_DISCOVERY_SCRIPT,
     rsync_command,
     rsync_remote,
     run_ssh,
@@ -103,8 +103,7 @@ AOV_RENDER_VARS = {
 }
 DEPTH_PREVIEW_RANGE_METERS = (1.5, 30.0)
 OPENUSD_INSTALL_HINT = (
-    "Local OpenUSD scene export requires usd-core. "
-    "Install it with `pip install 'robotic-renderers[ovrtx]'`."
+    "Local OpenUSD scene export requires usd-core. Run `uv sync --locked` in the checkout."
 )
 
 
@@ -227,7 +226,7 @@ def backend_status(host: str = DEFAULT_HOST) -> dict[str, object]:
                 4: "The uv-managed ovrtx environment is not installed",
                 5: "The frozen ovrtx runtime project is not installed",
                 6: "The ovrtx/ovstage Python packages could not be imported",
-                7: "The packaged ovrtx worker source is not installed",
+                7: "ovrtx worker source is missing; run setup --backend ovrtx",
                 8: (
                     "libOpenGL.so.0 is unavailable on the remote host; on Ubuntu run "
                     "`sudo apt-get install --no-install-recommends libopengl0`"
@@ -283,8 +282,7 @@ exec 9>"$root/setup.lock"
 chmod 600 "$root/setup.lock"
 flock -w 120 9
 {reset}
-uv_bin=$(command -v uv)
-test -n "$uv_bin"
+{UV_DISCOVERY_SCRIPT}
 UV_PROJECT_ENVIRONMENT="$root/.venv" \
   "$uv_bin" sync --directory "$incoming/runtime" --frozen --no-dev
 PYTHONPATH="$incoming/source" "$root/.venv/bin/python" - <<'PY'
@@ -322,7 +320,7 @@ nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | sed -n '1p'
 
 def setup_remote(host: str = DEFAULT_HOST, force: bool = False) -> dict[str, object]:
     """Install and synchronize the locked official ovrtx runtime on ``host``."""
-    runtime_project = resolve_runtime_project(PACKAGE_SOURCE, PROJECT_ROOT, BACKEND_NAME)
+    runtime_project = PROJECT_ROOT / "runtime" / BACKEND_NAME
     for required in (
         PACKAGE_SOURCE / "__init__.py",
         runtime_project / "pyproject.toml",
@@ -331,7 +329,7 @@ def setup_remote(host: str = DEFAULT_HOST, force: bool = False) -> dict[str, obj
         if not required.is_file():
             raise FileNotFoundError(f"Required ovrtx runtime source is missing: {required}")
 
-    uv_probe = _ssh_probe(host, "command -v uv")
+    uv_probe = _ssh_probe(host, UV_DISCOVERY_SCRIPT)
     if uv_probe.returncode != 0:
         raise RuntimeError(
             f"uv is not installed on {host}. Install it with: "
@@ -750,7 +748,6 @@ def prepare_ovrtx_bundle(
     sky_path = _write_gradient_sky(destination)
 
     scene_path = destination / "scene.usda"
-    geom_paths = []
     with scene_path.open("w") as stream:
         stream.write(
             """#usda 1.0
@@ -777,7 +774,6 @@ def Xform "World" {
         stream.write('    }\n    def Xform "Geometry" {\n')
         for index, geom in enumerate(manifest["geoms"]):
             identifier = f"Geom_{index:03d}_{_usd_identifier(geom['name'])}"
-            geom_paths.append(f"/World/Geometry/{identifier}")
             transform_samples = _time_sampled_transforms(
                 manifest["frames"], lambda frame, i=index: frame["transforms"][i]
             )
@@ -912,34 +908,8 @@ def Scope "Render" {{
     scene_path.unlink()
     scene_path = crate_path
 
-    geom_transforms = np.asarray(
-        [
-            [
-                _matrix(transform["position"], transform["rotation"])
-                for transform in frame["transforms"]
-            ]
-            for frame in manifest["frames"]
-        ],
-        dtype=np.float64,
-    )
-    camera_transforms = np.asarray(
-        [
-            [_matrix(frame["camera"]["position"], frame["camera"]["rotation"])]
-            for frame in manifest["frames"]
-        ],
-        dtype=np.float64,
-    )
-    animation_path = destination / "animation.npz"
-    np.savez_compressed(
-        animation_path,
-        geom_transforms=geom_transforms,
-        camera_transforms=camera_transforms,
-    )
     bundle = {
         "scene": scene_path.name,
-        "animation": animation_path.name,
-        "geom_paths": geom_paths,
-        "camera_path": "/World/Camera",
         "render_product": "/Render/Camera",
         "width": width,
         "height": height,
@@ -951,7 +921,6 @@ def Scope "Render" {{
         "aovs": list(normalized_aovs),
         "annotation_render_vars": list(annotation_render_vars),
         "annotation_product": "/Render/Annotations" if annotation_render_vars else None,
-        "animated_in_usd": True,
     }
     bundle_path = destination / "ovrtx_bundle.json"
     bundle_path.write_text(json.dumps(bundle, separators=(",", ":")))
@@ -1455,11 +1424,11 @@ def render_live(
     aov_output_dir: str | Path | None = None,
 ) -> dict[str, object]:
     from robotic_renderers.media import display_frames
-    from robotic_renderers.scene import CAMERA_ORBIT_PERIOD, trajectory_times
+    from robotic_renderers.scene import CAMERA_SEQUENCE_DURATION, trajectory_times
 
     normalized_mode, render_mode_token = _normalize_render_mode(render_mode)
     normalized_aovs = _normalize_aovs(aovs)
-    source_duration = duration if duration is not None else CAMERA_ORBIT_PERIOD
+    source_duration = duration if duration is not None else CAMERA_SEQUENCE_DURATION
     times = list(trajectory_times(source_duration, fps))
     aov_outputs: dict[str, object] = {}
     output_dir = _aov_directory(aov_output_dir, "live") if normalized_aovs else None
@@ -1949,56 +1918,28 @@ def _decode_aov_frame(payload: bytes) -> dict[str, object]:
 def _worker_frame(
     renderer,
     bundle,
-    animation,
     index: int,
-    stage=None,
-    ordinal: int | None = None,
+    *,
+    stage,
+    ordinal: int,
     update_stage: bool = True,
 ) -> dict[str, object]:
-    import ovrtx
+    if update_stage:
+        import ovstage
 
-    if bundle.get("animated_in_usd"):
-        time_code = (index + 1) / bundle["fps"]
-        if stage is None:
-            # Compatibility path retained for isolated tests and ovrtx 0.3
-            # callers. The current worker uses ovstage below.
-            renderer.update_from_usd_time(time_code)
-        elif update_stage:
-            import ovstage
-
-            assert ordinal is not None
-            ovstage.population.update_from_usd_time(
-                stage,
-                ordinal=ordinal,
-                time_code=time_code,
-            )
-            stage.advance_write_floor(ordinal, ovstage.Scope.ALL).wait()
-    else:
-        if index == 0:
-            print("[robot-rendering] applying geometry transforms", flush=True)
-        renderer.write_attribute(
-            prim_paths=bundle["geom_paths"],
-            attribute_name="omni:xform",
-            tensor=animation["geom_transforms"][index],
-            semantic=ovrtx.Semantic.XFORM_MAT4x4,
+        ovstage.population.update_from_usd_time(
+            stage,
+            ordinal=ordinal,
+            time=(index + 1) / bundle["fps"],
         )
-        if index == 0:
-            print("[robot-rendering] applying camera transform", flush=True)
-        renderer.write_attribute(
-            prim_paths=[bundle["camera_path"]],
-            attribute_name="omni:xform",
-            tensor=animation["camera_transforms"][index],
-            semantic=ovrtx.Semantic.XFORM_MAT4x4,
-        )
+        stage.advance_write_floor(ordinal, ovstage.Scope.ALL).wait()
     if index == 0:
         print("[robot-rendering] stepping RTX renderer", flush=True)
-    step_arguments = {
-        "render_products": {bundle["render_product"]},
-        "delta_time": 1.0 / bundle["fps"],
-    }
-    if stage is not None:
-        step_arguments["ordinal"] = ordinal
-    products = renderer.step(**step_arguments)
+    products = renderer.step(
+        render_products={bundle["render_product"]},
+        delta_time=1.0 / bundle["fps"],
+        ordinal=ordinal,
+    )
     product = products[bundle["render_product"]]
     if not product.frames:
         raise RuntimeError("ovrtx returned no camera frame")
@@ -2016,13 +1957,11 @@ def _worker_frame(
     if not aovs:
         return outputs
 
-    annotation_arguments = {
-        "render_products": {bundle["annotation_product"]},
-        "delta_time": 1.0 / bundle["fps"],
-    }
-    if stage is not None:
-        annotation_arguments["ordinal"] = ordinal
-    annotation_products = renderer.step(**annotation_arguments)
+    annotation_products = renderer.step(
+        render_products={bundle["annotation_product"]},
+        delta_time=1.0 / bundle["fps"],
+        ordinal=ordinal,
+    )
     annotation_product = annotation_products[bundle["annotation_product"]]
     if not annotation_product.frames:
         raise RuntimeError("ovrtx returned no annotation frame")
@@ -2081,7 +2020,6 @@ def _worker_main(arguments: list[str]) -> int:
         import ovstage
 
         bundle = json.loads(bundle_path.read_text())
-        animation = np.load(bundle_path.parent / bundle["animation"])
         config = ovrtx.RendererConfig(
             log_level="warn",
             log_file_path=str(log_path),
@@ -2098,7 +2036,7 @@ def _worker_main(arguments: list[str]) -> int:
             stage,
             str(bundle_path.parent / bundle["scene"]),
             ordinal=ordinal,
-            time_code=1.0 / bundle["fps"],
+            time=1.0 / bundle["fps"],
             domains=ovstage.PopulationDomain.RENDERING,
         )
         stage.advance_write_floor(ordinal, ovstage.Scope.ALL).wait()
@@ -2109,7 +2047,6 @@ def _worker_main(arguments: list[str]) -> int:
             first = _worker_frame(
                 renderer,
                 bundle,
-                animation,
                 0,
                 stage=stage,
                 ordinal=ordinal,
@@ -2130,7 +2067,6 @@ def _worker_main(arguments: list[str]) -> int:
                 frame = _worker_frame(
                     renderer,
                     bundle,
-                    animation,
                     index,
                     stage=stage,
                     ordinal=ordinal,

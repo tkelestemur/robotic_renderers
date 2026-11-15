@@ -17,7 +17,7 @@ def test_curated_video_manifest_matches_checked_in_artifacts():
     video_directory = Path(__file__).resolve().parents[1] / "videos"
     manifest_path = video_directory / "manifest.json"
     if not manifest_path.is_file():
-        pytest.skip("curated videos are repository release artifacts")
+        pytest.skip("curated example videos are absent from this checkout")
     manifest = json.loads(manifest_path.read_text())
 
     for filename, description in manifest["artifacts"].items():
@@ -30,7 +30,7 @@ def test_curated_video_manifest_matches_checked_in_artifacts():
 def test_curated_json_metadata_contains_no_absolute_paths():
     video_directory = Path(__file__).resolve().parents[1] / "videos"
     if not video_directory.is_dir():
-        pytest.skip("curated videos are repository release artifacts")
+        pytest.skip("curated example videos are absent from this checkout")
 
     for path in video_directory.rglob("*.json"):
         text = path.read_text()

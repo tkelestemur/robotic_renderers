@@ -48,7 +48,29 @@ def test_optix_requires_new_upstream_api(monkeypatch):
     with pytest.raises(RuntimeError, match="pinned isolated runtime"):
         warp._ray_backend_options("optix")
     monkeypatch.setattr(warp.mjw, "create_render_context", lambda model, backend="warp": None)
+    monkeypatch.setattr(warp.importlib, "import_module", Mock())
     assert warp._ray_backend_options("optix") == {"backend": "optix"}
+
+
+def test_optix_reports_driver_abi_failure_before_upstream_hides_it(monkeypatch):
+    monkeypatch.setattr(warp.wp, "is_cuda_available", lambda: True)
+    monkeypatch.setattr(warp.wp, "get_device", lambda: SimpleNamespace(is_cuda=True))
+    monkeypatch.setattr(warp.mjw, "create_render_context", lambda model, backend="warp": None)
+    monkeypatch.setattr(
+        warp.importlib, "import_module", Mock(side_effect=ImportError("Unsupported ABI version"))
+    )
+    with pytest.raises(RuntimeError, match="Unsupported ABI version.*R590"):
+        warp._ray_backend_options("optix")
+
+
+def test_remote_worker_failure_keeps_driver_diagnostics(monkeypatch):
+    monkeypatch.setattr(
+        warp,
+        "_run",
+        Mock(side_effect=subprocess.CalledProcessError(1, "ssh", stderr="Unsupported ABI version")),
+    )
+    with pytest.raises(RuntimeError, match="Unsupported ABI version"):
+        warp._run_remote_worker("render-host", ["status"], ray_backend="optix")
 
 
 def test_optix_rejects_upstream_fallback():

@@ -13,7 +13,14 @@ _HOST_PATTERN = re.compile(r"^(?:[A-Za-z0-9][A-Za-z0-9_.-]*@)?[A-Za-z0-9][A-Za-z
 DEFAULT_CONNECT_TIMEOUT = 10
 DEFAULT_OPERATION_TIMEOUT = 300
 DEFAULT_MAX_PAYLOAD_BYTES = 2 * 1024 * 1024 * 1024
-REMOTE_PACKAGE_EXCLUDES = ("/data/", "__pycache__/", "*.py[co]")
+REMOTE_PACKAGE_EXCLUDES = ("__pycache__/", "*.py[co]")
+UV_DISCOVERY_SCRIPT = """uv_bin=$(command -v uv || true)
+if [ -z "$uv_bin" ] && [ -x "$HOME/.local/bin/uv" ]; then
+  uv_bin="$HOME/.local/bin/uv"
+fi
+test -n "$uv_bin"
+test -x "$uv_bin"
+"""
 
 
 def ssh_options(connect_timeout: int = DEFAULT_CONNECT_TIMEOUT) -> list[str]:
@@ -97,25 +104,6 @@ def rsync_command(
         command.append(f"--exclude={pattern}")
     command.extend((str(source), destination))
     return command
-
-
-def resolve_runtime_project(
-    package_source: str | Path,
-    project_root: str | Path,
-    backend: str,
-) -> Path:
-    """Find a frozen remote runtime in a checkout or an installed wheel."""
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", backend):
-        raise ValueError(f"Unsafe backend runtime name: {backend!r}")
-    candidates = (
-        Path(project_root) / "runtime" / backend,
-        Path(package_source) / "data" / "runtime" / backend,
-    )
-    for candidate in candidates:
-        if (candidate / "pyproject.toml").is_file() and (candidate / "uv.lock").is_file():
-            return candidate
-    locations = ", ".join(str(candidate) for candidate in candidates)
-    raise FileNotFoundError(f"Frozen {backend} runtime is unavailable; searched: {locations}")
 
 
 def read_exact(stream, byte_count: int, *, max_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES) -> bytes:

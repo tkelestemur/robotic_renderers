@@ -20,7 +20,7 @@ uv run robotic-renderers still --backend warp-optix --host render-host \
 ```
 
 The remote root is `~/.cache/robot_rendering_warp_optix`, separate from ordinary
-Warp's environment. An NVIDIA driver supporting CUDA and OptiX 9.1 is required;
+Warp's environment. NVIDIA driver R590 or newer supporting CUDA and OptiX 9.1 is required;
 the CUDA Toolkit and OptiX SDK are not separately needed. Installation and rendering
 run on the remote Linux host, not the macOS orchestrator.
 
@@ -31,5 +31,6 @@ uv lock --project runtime/warp-optix
 ```
 
 Local checks cover dependency resolution, orchestration, fallback rejection, and
-the pinned source's ordinary CPU rendering path. Actual OptiX rendering still needs
-a GPU-host smoke test.
+the pinned source's ordinary CPU rendering path. OptiX stills, short recordings,
+headless live streams, and 1-/2-world batches have also passed smoke checks on an
+NVIDIA L4 with driver 595.99.02.

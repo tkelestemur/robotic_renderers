@@ -9,27 +9,8 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-PACKAGE_ROOT = Path(__file__).resolve().parent
-SOURCE_ROOT = PACKAGE_ROOT.parents[1]
-
-
-def _resolve_fr3_directory(
-    package_root: Path = PACKAGE_ROOT,
-    source_root: Path = SOURCE_ROOT,
-) -> Path:
-    """Locate FR3 assets in an installed wheel or a source checkout."""
-    candidates = (
-        package_root / "data" / "franka_fr3",
-        source_root / "third_party" / "mujoco_menagerie" / "franka_fr3",
-    )
-    for candidate in candidates:
-        if (candidate / "fr3.xml").is_file():
-            return candidate
-    searched = ", ".join(str(candidate) for candidate in candidates)
-    raise FileNotFoundError(f"Franka FR3 assets are missing; searched: {searched}")
-
-
-FR3_DIR = _resolve_fr3_directory()
+SOURCE_ROOT = Path(__file__).resolve().parents[2]
+FR3_DIR = SOURCE_ROOT / "third_party" / "mujoco_menagerie" / "franka_fr3"
 FR3_XML = FR3_DIR / "fr3.xml"
 CAMERA_NAME = "evaluation_camera"
 CAMERA_TARGET = np.array([0.10, 0.0, 0.51], dtype=float)
@@ -38,8 +19,6 @@ CAMERA_ORBITS_PER_SEQUENCE = 2.0
 CAMERA_RADIUS = 2.35
 CAMERA_HEIGHT = 1.40
 CAMERA_START_ANGLE = np.deg2rad(-58.0)
-# Kept as the public live-view loop duration for backend compatibility.
-CAMERA_ORBIT_PERIOD = CAMERA_SEQUENCE_DURATION
 HOME_QPOS = np.array([0.0, 0.0, 0.0, -1.57079, 0.0, 1.57079, -0.7853])
 
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import importlib
 import inspect
 import json
 import os
@@ -39,8 +41,8 @@ from robotic_renderers.media import (
 )
 from robotic_renderers.processes import terminate_and_reap
 from robotic_renderers.remote import (
+    UV_DISCOVERY_SCRIPT,
     read_exact,
-    resolve_runtime_project,
     validate_ssh_host,
 )
 from robotic_renderers.scene import create_model_and_data, set_scene_time, trajectory_times
@@ -112,26 +114,6 @@ def _remote_root(ray_backend: str) -> str:
     return REMOTE_ROOT
 
 
-def _find_repository_root() -> Path | None:
-    candidates = (Path.cwd(), PROJECT_ROOT)
-    for candidate in candidates:
-        if (candidate / "pyproject.toml").is_file() and (
-            candidate / "src" / "robotic_renderers" / "__init__.py"
-        ).is_file():
-            return candidate.resolve()
-    return None
-
-
-def _repository_root() -> Path:
-    root = _find_repository_root()
-    if root is not None:
-        return root
-    raise RuntimeError(
-        "Remote Warp setup found neither a robotic-renderers source checkout "
-        "nor packaged worker/runtime data. Reinstall the package."
-    )
-
-
 def _run(command: list[str], **kwargs):
     return subprocess.run(command, check=True, **kwargs)
 
@@ -157,8 +139,8 @@ def _bundle_path_is_safe(relative_path: Path) -> bool:
     return not name.lower().endswith(REMOTE_BUNDLE_SENSITIVE_SUFFIXES)
 
 
-def _source_bundle_sources(root: Path, ray_backend: str = "warp") -> dict[Path, Path]:
-    root = root.resolve()
+def _remote_bundle_sources(root: Path | None = None, ray_backend: str = "warp") -> dict[Path, Path]:
+    root = (root or PROJECT_ROOT).resolve()
     runtime_directory = _runtime_directory(ray_backend)
     required = (
         runtime_directory / "pyproject.toml",
@@ -185,68 +167,6 @@ def _source_bundle_sources(root: Path, ray_backend: str = "warp") -> dict[Path, 
                 if _bundle_path_is_safe(relative_path):
                     sources[relative_path] = source
     return sources
-
-
-def _installed_bundle_sources(
-    package_source: Path = PACKAGE_SOURCE,
-    runtime_project: Path | None = None,
-    ray_backend: str = "warp",
-) -> dict[Path, Path]:
-    """Map installed package files back into the remote source layout."""
-    package_source = package_source.resolve()
-    if runtime_project is None:
-        runtime_project = resolve_runtime_project(
-            package_source,
-            package_source.parents[1],
-            _backend_name(ray_backend),
-        )
-    runtime_project = runtime_project.resolve()
-    required = (
-        package_source / "__init__.py",
-        package_source / "backends" / "mujoco_warp.py",
-        package_source / "scene.py",
-        package_source / "data" / "franka_fr3" / "fr3.xml",
-        runtime_project / "pyproject.toml",
-        runtime_project / "uv.lock",
-    )
-    missing = [str(path) for path in required if not path.is_file()]
-    if missing:
-        raise FileNotFoundError(
-            f"Installed remote Warp bundle is missing required files: {missing}"
-        )
-
-    sources: dict[Path, Path] = {}
-    for source in package_source.rglob("*"):
-        if not (source.is_file() or source.is_symlink()):
-            continue
-        package_relative = source.relative_to(package_source)
-        if package_relative.parts[:2] == ("data", "runtime"):
-            continue
-        relative_path = Path("src/robotic_renderers") / package_relative
-        if _bundle_path_is_safe(relative_path):
-            sources[relative_path] = source
-    for source in runtime_project.rglob("*"):
-        if source.is_file() or source.is_symlink():
-            relative_path = _runtime_directory(ray_backend) / source.relative_to(runtime_project)
-            if _bundle_path_is_safe(relative_path):
-                sources[relative_path] = source
-    return sources
-
-
-def _remote_bundle_sources(root: Path | None = None, ray_backend: str = "warp") -> dict[Path, Path]:
-    if root is not None:
-        return _source_bundle_sources(root, ray_backend)
-    checkout = _find_repository_root()
-    if checkout is not None:
-        return _source_bundle_sources(checkout, ray_backend)
-    return _installed_bundle_sources(ray_backend=ray_backend)
-
-
-def _remote_bundle_entries(root: Path | None = None, ray_backend: str = "warp") -> tuple[Path, ...]:
-    """Return the explicit, secret-resistant file manifest sent to the Warp host."""
-    return tuple(
-        sorted(_remote_bundle_sources(root, ray_backend), key=lambda path: path.as_posix())
-    )
 
 
 def _remote_bundle_fingerprint(root: Path | None = None, ray_backend: str = "warp") -> str:
@@ -319,7 +239,8 @@ test -f "$runtime/uv.lock"
 exec 9>"$root/sync.lock"
 chmod 600 "$root/sync.lock"
 flock -w 120 9
-UV_PROJECT_ENVIRONMENT="$root/.venv" "$HOME/.local/bin/uv" sync \
+{UV_DISCOVERY_SCRIPT}
+UV_PROJECT_ENVIRONMENT="$root/.venv" "$uv_bin" sync \
   --directory "$runtime" --python 3.12 --frozen --no-dev
 PYTHONPATH="$incoming/src" "$root/.venv/bin/python" -c \
   'import imageio, mujoco, mujoco_warp, numpy, PIL, warp; from pxr import Sdf'
@@ -331,7 +252,13 @@ rm -rf "$old"
 
 
 def backend_status(host: str = DEFAULT_HOST) -> dict[str, object]:
-    local_device = f"CPU ({os.uname().machine})"
+    # Keep Warp's initialization banner out of the CLI's JSON stdout.
+    with contextlib.redirect_stdout(sys.stderr):
+        local_device = (
+            f"{wp.get_device('cuda:0').name} (cuda:0)"
+            if wp.is_cuda_available()
+            else f"CPU ({os.uname().machine})"
+        )
     return {
         "backend": BACKEND_NAME,
         "available": True,
@@ -341,7 +268,7 @@ def backend_status(host: str = DEFAULT_HOST) -> dict[str, object]:
         "live": True,
         "record": True,
         "notes": (
-            "The Warp ray renderer runs locally on macOS through Warp's CPU device. "
+            "Warp uses local CUDA when available, otherwise CPU (including macOS). "
             f"Remote CUDA on {host} remains optional via --remote-warp."
         ),
     }
@@ -358,7 +285,7 @@ def setup_remote(
         return {"host": host, "synced": True, "cached": True}
 
     uv_probe = subprocess.run(
-        _ssh_command(host, 'test -x "$HOME/.local/bin/uv"'),
+        _ssh_command(host, UV_DISCOVERY_SCRIPT),
         capture_output=True,
         text=True,
         timeout=15.0,
@@ -425,6 +352,14 @@ def _ray_backend_options(ray_backend: str) -> dict[str, str]:
             "This MuJoCo Warp build lacks OptiX support. "
             "Run setup --backend warp-optix to install the pinned isolated runtime."
         )
+    try:
+        importlib.import_module("warp_optix")
+    except (ImportError, OSError, RuntimeError) as exc:
+        raise RuntimeError(
+            f"warp-optix could not initialize: {exc}. The pinned OptiX 9.1 runtime "
+            "requires NVIDIA driver R590 or newer. Check the driver and rerun "
+            "setup --backend warp-optix."
+        ) from exc
     return {"backend": "optix"}
 
 
@@ -696,12 +631,18 @@ def _parse_remote_result(stdout: str) -> dict[str, object]:
 def _run_remote_worker(
     host: str, arguments: list[str], *, ray_backend: str = "warp", timeout: float | None = None
 ) -> dict[str, object]:
-    completed = _run(
-        _ssh_command(host, _remote_shell_command(arguments, ray_backend)),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    try:
+        completed = _run(
+            _ssh_command(host, _remote_shell_command(arguments, ray_backend)),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (str(exc.stdout or "") + "\n" + str(exc.stderr or ""))[-12000:]
+        raise RuntimeError(
+            f"{_backend_name(ray_backend)} worker failed on {host}:\n{detail}"
+        ) from exc
     return _parse_remote_result(completed.stdout)
 
 
@@ -977,10 +918,8 @@ def render_live(
     ray_backend: str = "warp",
 ) -> dict[str, object]:
     if local:
-        device = "cuda:0" if ray_backend == "optix" else "cpu"
-        context = create_renderer(
-            width, height, supersample=supersample, device=device, ray_backend=ray_backend
-        )
+        context = create_renderer(width, height, supersample=supersample, ray_backend=ray_backend)
+        device = context["device"]
 
         def frames():
             frame_index = 0

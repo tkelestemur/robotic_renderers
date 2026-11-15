@@ -113,18 +113,3 @@ def test_portable_mjcf_bundle_round_trips(tmp_path: Path):
     assert (tmp_path / "assets" / "link0_0.obj").exists()
     assert model.nq == 7
     assert model.ncam == 1
-
-
-def test_fr3_assets_resolve_in_source_and_installed_layouts(tmp_path: Path):
-    package_root = tmp_path / "site-packages" / "robotic_renderers"
-    installed_assets = package_root / "data" / "franka_fr3"
-    installed_assets.mkdir(parents=True)
-    (installed_assets / "fr3.xml").write_text("<mujoco/>")
-
-    source_root = tmp_path / "checkout"
-    source_assets = source_root / "third_party" / "mujoco_menagerie" / "franka_fr3"
-    source_assets.mkdir(parents=True)
-    (source_assets / "fr3.xml").write_text("<mujoco/>")
-
-    assert scene._resolve_fr3_directory(package_root, source_root) == installed_assets
-    assert scene._resolve_fr3_directory(tmp_path / "empty-package", source_root) == source_assets

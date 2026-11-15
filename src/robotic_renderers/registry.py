@@ -70,11 +70,4 @@ def backend_spec(name: str) -> dict[str, object]:
 
 
 def load_backend(name: str):
-    try:
-        return importlib.import_module(str(backend_spec(name)["module"]))
-    except ModuleNotFoundError as exc:
-        extra = "warp" if name == "warp" else "all"
-        raise RuntimeError(
-            f"{name} backend dependency {exc.name!r} is unavailable. "
-            f"Install robotic-renderers[{extra}]."
-        ) from exc
+    return importlib.import_module(str(backend_spec(name)["module"]))

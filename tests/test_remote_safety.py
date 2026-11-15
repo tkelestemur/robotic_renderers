@@ -11,6 +11,29 @@ from robotic_renderers.backends import mujoco_warp as render_mujoco_warp
 from robotic_renderers.workflows import cosmos3 as render_cosmos3
 
 
+def test_warp_status_reports_local_cuda_instead_of_always_cpu(monkeypatch):
+    monkeypatch.setattr(render_mujoco_warp.wp, "is_cuda_available", lambda: True)
+    monkeypatch.setattr(
+        render_mujoco_warp.wp, "get_device", lambda name: SimpleNamespace(name="Test GPU")
+    )
+    assert render_mujoco_warp.backend_status()["device"] == "Test GPU (cuda:0)"
+
+
+def test_local_warp_live_uses_the_renderer_selected_device(monkeypatch):
+    def create_renderer(*args, **kwargs):
+        assert "device" not in kwargs
+        return {"device": "cuda:0"}
+
+    monkeypatch.setattr(render_mujoco_warp, "create_renderer", create_renderer)
+    monkeypatch.setattr(
+        render_mujoco_warp,
+        "display_frames",
+        lambda *args, **kwargs: {"frames": 0},
+    )
+    result = render_mujoco_warp.render_live(duration=0.5)
+    assert result["device"] == "cuda:0"
+
+
 def _minimal_warp_source(root: Path) -> None:
     for name in ("pyproject.toml", "uv.lock"):
         (root / name).write_text(f"# root {name} must not be uploaded\n")
@@ -25,23 +48,6 @@ def _minimal_warp_source(root: Path) -> None:
     (root / "src" / "robotic_renderers" / "__init__.py").write_text("")
     (root / "src" / "robotic_renderers" / "scene.py").write_text("# scene.py\n")
     (backend / "mujoco_warp.py").write_text("# mujoco_warp.py\n")
-
-
-def _minimal_installed_warp_package(package: Path, name: str = "warp") -> Path:
-    backend = package / "backends"
-    backend.mkdir(parents=True)
-    (package / "__init__.py").write_text("")
-    (package / "scene.py").write_text("# scene.py\n")
-    (backend / "mujoco_warp.py").write_text("# mujoco_warp.py\n")
-    fr3 = package / "data" / "franka_fr3"
-    fr3.mkdir(parents=True)
-    (fr3 / "fr3.xml").write_text("<mujoco/>\n")
-    runtime = package / "data" / "runtime" / name
-    runtime.mkdir(parents=True)
-    (runtime / "pyproject.toml").write_text("[project]\nname='warp-runtime'\n")
-    (runtime / "uv.lock").write_text("version = 1\n")
-    (runtime / "README.md").write_text("# Warp runtime\n")
-    return runtime
 
 
 def test_remote_commands_use_noninteractive_keepalive_options():
@@ -104,27 +110,6 @@ def test_warp_bundle_fingerprint_changes_with_source(tmp_path: Path):
     )
 
     assert render_mujoco_warp._remote_bundle_fingerprint(tmp_path) != first
-
-
-@pytest.mark.parametrize(("ray_backend", "name"), (("warp", "warp"), ("optix", "warp-optix")))
-def test_installed_warp_bundle_reconstructs_remote_source_layout(tmp_path: Path, ray_backend, name):
-    package = tmp_path / "site-packages" / "robotic_renderers"
-    runtime = _minimal_installed_warp_package(package, name)
-    (package / ".env").write_text("TOKEN=secret\n")
-    unrelated = package / "data" / "runtime" / "ovrtx"
-    unrelated.mkdir(parents=True)
-    (unrelated / "uv.lock").write_text("version = 1\n")
-
-    sources = render_mujoco_warp._installed_bundle_sources(package, runtime, ray_backend)
-    entries = {path.as_posix() for path in sources}
-
-    assert "src/robotic_renderers/__init__.py" in entries
-    assert "src/robotic_renderers/backends/mujoco_warp.py" in entries
-    assert "src/robotic_renderers/data/franka_fr3/fr3.xml" in entries
-    assert f"runtime/{name}/pyproject.toml" in entries
-    assert f"runtime/{name}/uv.lock" in entries
-    assert "src/robotic_renderers/.env" not in entries
-    assert "src/robotic_renderers/data/runtime/ovrtx/uv.lock" not in entries
 
 
 def test_warp_worker_runs_from_isolated_remote_source():

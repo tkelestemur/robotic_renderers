@@ -37,7 +37,7 @@ from robotic_renderers.geometry import (
 )
 from robotic_renderers.remote import (
     REMOTE_PACKAGE_EXCLUDES,
-    resolve_runtime_project,
+    UV_DISCOVERY_SCRIPT,
     rsync_command,
     rsync_remote,
     run_ssh,
@@ -129,7 +129,7 @@ def backend_status(host: str = DEFAULT_HOST) -> dict[str, object]:
                 messages = {
                     4: "The uv-managed Mitsuba environment is not installed",
                     5: "The frozen Mitsuba runtime project is not installed",
-                    6: "The packaged Mitsuba worker source is not installed",
+                    6: "Mitsuba worker source is missing; run setup --backend mitsuba",
                 }
                 error = messages.get(
                     probe.returncode,
@@ -171,8 +171,7 @@ exec 9>"$root/setup.lock"
 chmod 600 "$root/setup.lock"
 flock -w 120 9
 {reset}
-uv_bin=$(command -v uv)
-test -n "$uv_bin"
+{UV_DISCOVERY_SCRIPT}
 UV_PROJECT_ENVIRONMENT="$root/.venv" \
   "$uv_bin" sync --directory "$incoming/runtime" --frozen --no-dev
 PYTHONPATH="$incoming/source" \
@@ -196,7 +195,7 @@ nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | sed -n '1p'
 
 def setup_remote(host: str = DEFAULT_HOST, force: bool = False) -> dict[str, object]:
     """Install and synchronize the uv-managed Mitsuba worker on ``host``."""
-    runtime_project = resolve_runtime_project(PACKAGE_SOURCE, PROJECT_ROOT, BACKEND_NAME)
+    runtime_project = PROJECT_ROOT / "runtime" / BACKEND_NAME
     for required in (
         PACKAGE_SOURCE / "__init__.py",
         runtime_project / "pyproject.toml",
@@ -205,7 +204,7 @@ def setup_remote(host: str = DEFAULT_HOST, force: bool = False) -> dict[str, obj
         if not required.is_file():
             raise FileNotFoundError(f"Required Mitsuba runtime source is missing: {required}")
 
-    uv_probe = _ssh_probe(host, "command -v uv")
+    uv_probe = _ssh_probe(host, UV_DISCOVERY_SCRIPT)
     if uv_probe.returncode != 0:
         raise RuntimeError(
             f"uv is not installed on {host}. Install it with: "
@@ -785,9 +784,9 @@ def render_live(
     host: str = DEFAULT_HOST,
 ) -> dict[str, object]:
     from robotic_renderers.media import display_frames
-    from robotic_renderers.scene import CAMERA_ORBIT_PERIOD, trajectory_times
+    from robotic_renderers.scene import CAMERA_SEQUENCE_DURATION, trajectory_times
 
-    source_duration = duration if duration is not None else CAMERA_ORBIT_PERIOD
+    source_duration = duration if duration is not None else CAMERA_SEQUENCE_DURATION
     times = list(trajectory_times(source_duration, fps))
     result = display_frames(
         _frame_source(times, width, height, fps, samples, host, loop=duration is None),

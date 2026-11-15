@@ -1,20 +1,44 @@
 import io
 import subprocess
-from pathlib import Path
 
 import pytest
 
 from robotic_renderers.remote import (
-    REMOTE_PACKAGE_EXCLUDES,
+    UV_DISCOVERY_SCRIPT,
     parse_linux_process_starttime,
     read_exact,
-    resolve_runtime_project,
     rsync_command,
     rsync_remote,
     ssh_command,
     validate_ssh_host,
     worker_cleanup_script,
 )
+
+
+@pytest.mark.parametrize("location", ("path", "home", "missing"))
+def test_uv_discovery_works_without_interactive_shell_path(tmp_path, location):
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    local_bin = tmp_path / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    for directory in (binary_dir, local_bin):
+        if location == "missing" or (location == "home" and directory == binary_dir):
+            continue
+        executable = directory / "uv"
+        executable.write_text("#!/bin/sh\nexit 0\n")
+        executable.chmod(0o755)
+    result = subprocess.run(
+        ["/bin/sh", "-eu", "-c", UV_DISCOVERY_SCRIPT + '\nprintf "%s" "$uv_bin"'],
+        env={"HOME": str(tmp_path), "PATH": str(binary_dir)},
+        text=True,
+        capture_output=True,
+    )
+    if location == "missing":
+        assert result.returncode != 0
+    else:
+        assert result.returncode == 0, result.stderr
+        expected = binary_dir if location == "path" else local_bin
+        assert result.stdout == str(expected / "uv")
 
 
 @pytest.mark.parametrize(
@@ -68,29 +92,6 @@ def test_rsync_command_uses_the_same_noninteractive_transport():
     assert "--delete" in command
     assert "--exclude=__pycache__" in command
     assert command[-2:] == ["source/", "render-host:~/job/"]
-
-
-def test_remote_package_sync_excludes_bundled_assets_and_runtime_data():
-    assert "/data/" in REMOTE_PACKAGE_EXCLUDES
-    assert "__pycache__/" in REMOTE_PACKAGE_EXCLUDES
-    assert "*.py[co]" in REMOTE_PACKAGE_EXCLUDES
-
-
-def test_runtime_project_prefers_checkout_and_falls_back_to_wheel_data(
-    tmp_path: Path,
-):
-    package_source = tmp_path / "site-packages" / "robotic_renderers"
-    project_root = tmp_path / "checkout"
-    packaged = package_source / "data" / "runtime" / "mitsuba"
-    checkout = project_root / "runtime" / "mitsuba"
-    for runtime in (packaged, checkout):
-        runtime.mkdir(parents=True)
-        (runtime / "pyproject.toml").write_text("[project]\n")
-        (runtime / "uv.lock").write_text("version = 1\n")
-
-    assert resolve_runtime_project(package_source, project_root, "mitsuba") == checkout
-    (checkout / "uv.lock").unlink()
-    assert resolve_runtime_project(package_source, project_root, "mitsuba") == packaged
 
 
 def test_linux_stat_parser_handles_spaces_and_parentheses_in_process_name():

@@ -80,13 +80,13 @@ def test_ovrtx_status_requires_local_openusd(monkeypatch):
     assert status["available"] is False
     assert status["local_openusd"] is False
     assert status["device"] == "NVIDIA L40S"
-    assert "robotic-renderers[ovrtx]" in status["error"]
+    assert "uv sync --locked" in status["error"]
 
 
 def test_load_sdf_reports_an_actionable_install_hint(monkeypatch):
     monkeypatch.setitem(sys.modules, "pxr", None)
 
-    with pytest.raises(RuntimeError, match=r"robotic-renderers\[ovrtx\]"):
+    with pytest.raises(RuntimeError, match="uv sync --locked"):
         render_ovrtx._load_sdf()
 
 
@@ -103,16 +103,17 @@ def test_ovrtx_bundle_contains_canonical_scene_and_animation(tmp_path: Path):
     scene_layer = Sdf.Layer.FindOrOpen(str(tmp_path / bundle["scene"]))
     assert scene_layer is not None
     scene = scene_layer.ExportToString()
-    animation = np.load(tmp_path / bundle["animation"])
-
     assert bundle["render_mode"] == "PathTracing"
-    assert bundle["animated_in_usd"] is True
     assert bundle["scene"].endswith(".usdc")
     assert bundle["frames"] == 2
-    geom_count = len(bundle["geom_paths"])
-    assert geom_count >= 30
-    assert animation["geom_transforms"].shape == (2, geom_count, 4, 4)
-    assert animation["camera_transforms"].shape == (2, 1, 4, 4)
+    geoms = scene_layer.GetPrimAtPath("/World/Geometry").nameChildren
+    assert len(geoms) >= 30
+    for prim in [*geoms.values(), scene_layer.GetPrimAtPath("/World/Camera")]:
+        transform = prim.path.AppendProperty("xformOp:transform")
+        assert scene_layer.ListTimeSamplesForPath(transform) == [1.0, 2.0]
+        assert np.isfinite(np.asarray(scene_layer.QueryTimeSample(transform, 1.0))).all()
+    camera = Sdf.Path("/World/Camera.xformOp:transform")
+    assert scene_layer.QueryTimeSample(camera, 1.0) != scene_layer.QueryTimeSample(camera, 2.0)
     assert 'token omni:rtx:rendermode = "PathTracing"' in scene
     assert "int omni:rtx:pt:samplesPerPixel = 8" in scene
     assert 'token[] omni:rtx:waitForEvents = ["AllLoadingFinished", "OnlyOnFirstRequest"]' in scene
@@ -664,47 +665,15 @@ def test_ovrtx_rejects_oversized_aov_payload_before_allocating(monkeypatch):
         next(frames)
 
 
-def test_worker_evaluates_each_authored_usd_frame_before_rendering(monkeypatch):
-    usd_times = []
-
-    def step(*, render_products, delta_time):
-        assert render_products == {"/Render/Camera"}
-        assert delta_time == 1.0 / 24.0
-        mapping = SimpleNamespace(unmap=lambda: None)
-        render_var = SimpleNamespace(map=lambda device: mapping)
-        frame = SimpleNamespace(render_vars={"/Render/Camera/LdrColor": render_var})
-        return {"/Render/Camera": SimpleNamespace(frames=[frame])}
-
-    fake_ovrtx = SimpleNamespace(Device=SimpleNamespace(CPU="cpu"))
-    monkeypatch.setitem(sys.modules, "ovrtx", fake_ovrtx)
-    monkeypatch.setattr(
-        np,
-        "from_dlpack",
-        lambda mapping: np.zeros((2, 3, 4), dtype=np.uint8),
-    )
-    renderer = SimpleNamespace(update_from_usd_time=usd_times.append, step=step)
-    bundle = {
-        "animated_in_usd": True,
-        "fps": 24,
-        "height": 2,
-        "width": 3,
-        "render_product": "/Render/Camera",
-    }
-
-    render_ovrtx._worker_frame(renderer, bundle, {}, index=0)
-    render_ovrtx._worker_frame(renderer, bundle, {}, index=11)
-
-    assert usd_times == [1.0 / 24.0, 12.0 / 24.0]
-
-
-def test_worker_advances_ovstage_time_and_renders_at_the_same_ordinal(monkeypatch):
+@pytest.mark.parametrize("index", (0, 11))
+def test_worker_advances_ovstage_time_and_renders_at_the_same_ordinal(monkeypatch, index):
     updates = []
     advances = []
     waits = []
     steps = []
 
-    def update_from_usd_time(stage, *, ordinal, time_code):
-        updates.append((stage, ordinal, time_code))
+    def update_from_usd_time(stage, *, ordinal, time):
+        updates.append((stage, ordinal, time))
 
     def advance_write_floor(ordinal, scope):
         advances.append((ordinal, scope))
@@ -732,7 +701,6 @@ def test_worker_advances_ovstage_time_and_renders_at_the_same_ordinal(monkeypatc
     renderer = SimpleNamespace(step=step)
     stage = SimpleNamespace(advance_write_floor=advance_write_floor)
     bundle = {
-        "animated_in_usd": True,
         "fps": 24,
         "height": 2,
         "width": 3,
@@ -742,13 +710,12 @@ def test_worker_advances_ovstage_time_and_renders_at_the_same_ordinal(monkeypatc
     render_ovrtx._worker_frame(
         renderer,
         bundle,
-        {},
-        index=11,
+        index=index,
         stage=stage,
         ordinal=7,
     )
 
-    assert updates == [(stage, 7, 0.5)]
+    assert updates == [(stage, 7, (index + 1) / 24)]
     assert advances == [(7, "all")]
     assert waits == [7]
     assert steps == [({"/Render/Camera"}, 1.0 / 24.0, 7)]
@@ -798,9 +765,9 @@ def test_worker_maps_rgb_and_annotations_by_full_product_path(monkeypatch, rende
 
         return SimpleNamespace(array=arrays[path], unmap=unmap)
 
-    def step(*, render_products, delta_time):
+    def step(*, render_products, delta_time, ordinal):
         product = next(iter(render_products))
-        steps.append((product, delta_time))
+        steps.append((product, delta_time, ordinal))
         variables = {
             path: SimpleNamespace(map=lambda device, path=path: map_output(path, device))
             for path in arrays
@@ -811,7 +778,6 @@ def test_worker_maps_rgb_and_annotations_by_full_product_path(monkeypatch, rende
     monkeypatch.setitem(sys.modules, "ovrtx", SimpleNamespace(Device=SimpleNamespace(CPU="cpu")))
     monkeypatch.setattr(np, "from_dlpack", lambda mapping: mapping.array)
     bundle = {
-        "animated_in_usd": True,
         "fps": 24,
         "height": 2,
         "width": 3,
@@ -825,9 +791,11 @@ def test_worker_maps_rgb_and_annotations_by_full_product_path(monkeypatch, rende
             )
         ),
     }
-    renderer = SimpleNamespace(step=step, update_from_usd_time=lambda time: None)
+    renderer = SimpleNamespace(step=step)
 
-    result = render_ovrtx._worker_frame(renderer, bundle, {}, index=1)
+    result = render_ovrtx._worker_frame(
+        renderer, bundle, index=1, stage=object(), ordinal=8, update_stage=False
+    )
 
     np.testing.assert_array_equal(result["rgb"], np.full((2, 3, 3), 101, dtype=np.uint8))
     np.testing.assert_array_equal(result["depth"], np.full((2, 3), 2.5))
@@ -840,7 +808,7 @@ def test_worker_maps_rgb_and_annotations_by_full_product_path(monkeypatch, rende
         "instance": {"0": "unlabeled", "1": "cube", "2": "fr3"},
     }
     assert set(unmapped) == set(arrays)
-    assert steps == [("/Render/Camera", 1 / 24), ("/Render/Annotations", 1 / 24)]
+    assert steps == [("/Render/Camera", 1 / 24, 8), ("/Render/Annotations", 1 / 24, 8)]
 
 
 def test_semantic_id_map_decodes_strided_utf8_spans_and_empty_rows():
