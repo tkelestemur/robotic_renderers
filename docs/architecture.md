@@ -9,7 +9,8 @@ trajectory, checker scale, sky, and key/fill/rim lighting.
 ```text
 robotic_renderers.scene
   ├─ MuJoCo model/data ──> OpenGL
-  │                    └─> MuJoCo Warp
+  │                    ├─> MuJoCo Warp
+  │                    └─> MuJoCo Warp + OptiX (isolated remote runtime)
   └─ neutral scene bundle
        ├─> Blender bundle ──> isolated Blender process
        ├─> OpenUSD ─────────> remote ovrtx worker
@@ -68,6 +69,11 @@ Backend modules own renderer-specific setup; orchestration belongs in `cli.py` a
 workflow modules.
 
 ## Isolation
+
+The two Warp adapters share translation, shading, media, and SSH helpers. OptiX is
+selected explicitly with `create_render_context(backend="optix")` and checked after
+context creation. Its source pin and `warp-optix` wheel live in `runtime/warp-optix`;
+ordinary Warp retains the released package in `runtime/warp`.
 
 Blender executes with its bundled, version-matched Python API. ovrtx, CUDA Mitsuba, and
 Cosmos execute in dedicated remote uv environments. The application environment must

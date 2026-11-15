@@ -12,12 +12,12 @@ The installation sequence used on the remote host is:
 ```bash
 uv venv --python 3.12 --managed-python --seed .venv
 uv pip install --python .venv/bin/python --torch-backend=cu130 \
-  'vllm==0.28.0' \
-  'vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@eb11446b7f2e30ca582f8aff3afe12e9a2e66f6c'
+  'vllm==0.32.0' \
+  'vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@5917730a4b02aedb44d374173cdc1b10484ccd52'
 ```
 
-This is the vLLM-Omni 0.28.0 release commit. Its supported vLLM release line is
-0.28.x, so vLLM 0.29.0 is intentionally excluded. Both packages are resolved in
+This is the vLLM-Omni 0.32.0 release commit. Its supported vLLM release line is
+0.32.x, so vLLM 0.33.0 is intentionally excluded. Both packages are resolved in
 one transaction to prevent the second installation from replacing the first
 package's dependencies with an incompatible set. Existing services must be stopped
 before `cosmos setup --force` recreates their environment. Setup checks the installed

@@ -47,8 +47,8 @@ from robotic_renderers.remote import (
 )
 
 BACKEND_NAME = "ovrtx"
-OVRTX_VERSION = "0.5.0.377615"
-OVSTAGE_VERSION = "0.2.0.377349"
+OVRTX_VERSION = "0.7.0.1794596436"
+OVSTAGE_VERSION = "0.4.0.1794520352"
 DEFAULT_HOST = os.environ.get("ROBOT_RENDERING_OVRTX_HOST", DEFAULT_RENDER_HOST)
 PACKAGE_SOURCE = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = PACKAGE_SOURCE.parents[1]
@@ -300,7 +300,7 @@ except OSError as exc:
         "ovrtx requires libOpenGL.so.0; on Ubuntu run: "
         "sudo apt-get install --no-install-recommends libopengl0"
     ) from exc
-assert ovrtx.__version__ == "0.5.0"
+assert ovrtx.__version__ == "{OVRTX_VERSION}"
 assert version("ovrtx") == "{OVRTX_VERSION}"
 assert version("ovstage") == "{OVSTAGE_VERSION}"
 PY
@@ -1845,12 +1845,19 @@ def benchmark(
     }
 
 
-def _map_render_var(frame, path: str) -> np.ndarray:
+def _map_render_var(frame, path: str) -> np.ndarray | dict[str, np.ndarray]:
     import ovrtx
 
-    # ovrtx 0.5 keys outputs by RenderVar path, including the owning product.
+    # Full paths disambiguate outputs shared by the RGB and annotation products.
     mapping = frame.render_vars[path].map(device=ovrtx.Device.CPU)
     try:
+        if path.rsplit("/", 1)[-1] == "SemanticIdMap":
+            # ovrtx 0.7 exposes named, potentially strided tensors rather than a
+            # packed byte buffer. Copy every field while its mapping is alive.
+            return {
+                name: np.from_dlpack(mapping[name]).copy()
+                for name in ("id", "label_offsets", "label_data")
+            }
         view = np.from_dlpack(mapping)
         result = np.ascontiguousarray(view).copy()
         del view
@@ -1859,25 +1866,28 @@ def _map_render_var(frame, path: str) -> np.ndarray:
         mapping.unmap()
 
 
-def _decode_semantic_id_map(tensor: np.ndarray) -> dict[int, str]:
-    data = np.ascontiguousarray(tensor).view(np.uint8).reshape(-1)
-    if data.size < 4:
-        return {}
-    entry_dtype = np.dtype([("id", "<u4", (4,)), ("label_length", "<u4"), ("label_offset", "<u4")])
-    num_entries = int.from_bytes(data[-4:].tobytes(), byteorder="little")
-    entries_size = num_entries * entry_dtype.itemsize
-    if entries_size > data.size - 4:
-        raise RuntimeError("ovrtx SemanticIdMap has an invalid entry table")
-    entries = data[:entries_size].view(entry_dtype).reshape(num_entries)
+def _decode_semantic_id_map(tensors: dict[str, np.ndarray]) -> dict[int, str]:
+    ids = tensors["id"]
+    offsets = tensors["label_offsets"]
+    data = tensors["label_data"]
+    if (
+        ids.dtype != np.uint32
+        or ids.ndim != 2
+        or ids.shape[1] != 4
+        or offsets.dtype != np.uint64
+        or offsets.shape != (len(ids) + 1,)
+        or data.dtype != np.uint8
+        or data.ndim != 1
+        or offsets[0] != 0
+        or offsets[-1] != data.size
+        or np.any(offsets[1:] < offsets[:-1])
+        or np.any(ids[:, 1:] != 0)
+    ):
+        raise RuntimeError("ovrtx SemanticIdMap has invalid identifier fields or label offsets")
+    # SemanticSegmentation pixels use the first word; the other three are zero.
     labels = {}
-    for entry in entries:
-        label_offset = int(entry["label_offset"])
-        label_length = int(entry["label_length"])
-        label_end = label_offset + label_length
-        if label_end > data.size:
-            raise RuntimeError("ovrtx SemanticIdMap has an invalid label offset")
-        label = data[label_offset:label_end].tobytes().decode("utf-8")
-        labels[int(entry["id"][0])] = label.rstrip("\x00").rstrip()
+    for identifier, start, end in zip(ids, offsets[:-1], offsets[1:], strict=True):
+        labels[int(identifier[0])] = data[int(start) : int(end)].tobytes().decode("utf-8")
     return labels
 
 
@@ -1892,7 +1902,7 @@ def _semantic_fields(label: str) -> dict[str, str]:
 
 def _remap_segmentation(
     raw_segmentation: np.ndarray,
-    semantic_id_map: np.ndarray,
+    semantic_id_map: dict[str, np.ndarray],
     semantic_type: str,
 ) -> tuple[np.ndarray, dict[str, str]]:
     labels_by_raw_id = _decode_semantic_id_map(semantic_id_map)

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from robotic_renderers.backends import mitsuba, mujoco_warp, ovrtx
+from robotic_renderers.backends import mitsuba, mujoco_warp, mujoco_warp_optix, ovrtx
 from robotic_renderers.benchmarks import throughput
 
 
@@ -34,7 +34,7 @@ def test_benchmark_parser_defaults_are_portable_and_full_resolution():
 
     assert args.host == "render-host"
     assert (args.width, args.height) == (1280, 720)
-    assert args.backends == ["opengl", "warp", "blender", "ovrtx", "mitsuba"]
+    assert args.backends == ["opengl", "warp", "warp-optix", "blender", "ovrtx", "mitsuba"]
     assert args.samples == 32
     assert args.blender_workers[-3:] == [48, 64, 96]
     assert args.blender_cpu_threads is None
@@ -203,6 +203,11 @@ def test_mitsuba_summary_reports_render_readback_and_throughput_fps():
 
 def test_setup_remote_sets_up_each_runtime(monkeypatch):
     monkeypatch.setattr(
+        mujoco_warp_optix,
+        "setup_remote",
+        lambda host: {"backend": "warp-optix", "host": host},
+    )
+    monkeypatch.setattr(
         mujoco_warp,
         "setup_remote",
         lambda host, force: {"host": host, "force": force},
@@ -222,6 +227,7 @@ def test_setup_remote_sets_up_each_runtime(monkeypatch):
     setup = throughput.setup_remote("render-host")
 
     assert setup["warp_project"] == {"host": "render-host", "force": True}
+    assert setup["warp-optix"] == {"backend": "warp-optix", "host": "render-host"}
     assert setup["ovrtx"] == {"backend": "ovrtx", "host": "render-host"}
     assert setup["mitsuba"] == {"backend": "mitsuba", "host": "render-host"}
     assert setup["blender"] == {"backend": "blender", "host": "render-host"}

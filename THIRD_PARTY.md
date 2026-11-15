@@ -50,10 +50,19 @@ this repository or its Python wheel.
 under GPL-3.0-or-later. Robotic Renderers launches Blender as an isolated process and
 does not vendor Blender or a `bpy` wheel.
 
+### NVIDIA warp-optix
+
+The isolated OptiX runtime installs
+[`warp-optix==0.3.0`](https://github.com/NVIDIA/warp-optix) and `pyoptix==9.1.1`,
+plus MuJoCo Warp source commit `cafb631fbda1ff69ef9db0bd6c6bc57896dc889d`.
+`runtime/warp-optix/uv.lock` pins distribution hashes. The warp-optix wheel declares
+`Apache-2.0 AND BSD-3-Clause AND LicenseRef-NVIDIA-OptiX`; consult its bundled notices
+and the NVIDIA OptiX terms for the included components.
+
 ### NVIDIA ovrtx and ovstage
 
 The remote setup installs the official Linux x86-64 Python distributions
-`ovrtx==0.5.0.377615` and `ovstage==0.2.0.377349` published by
+`ovrtx==0.7.0.1794596436` and `ovstage==0.4.0.1794520352` published by
 [`NVIDIA-Omniverse/ovrtx`](https://github.com/NVIDIA-Omniverse/ovrtx). Their complete
 transitive dependency set and artifact hashes are pinned in `runtime/ovrtx/uv.lock`;
 setup installs exclusively from that lock with `uv sync --frozen`.
@@ -75,9 +84,9 @@ enhancement grant; consult the license included with the installed distribution.
 
 Cosmos is optional and runs in a separate remote environment:
 
-- [`vllm==0.28.0`](https://github.com/vllm-project/vllm), Apache-2.0
+- [`vllm==0.32.0`](https://github.com/vllm-project/vllm), Apache-2.0
 - [`vllm-omni`](https://github.com/vllm-project/vllm-omni), Apache-2.0, pinned to
-  commit `eb11446b7f2e30ca582f8aff3afe12e9a2e66f6c`
+  commit `5917730a4b02aedb44d374173cdc1b10484ccd52`
 - [`nvidia/Cosmos3-Super`](https://huggingface.co/nvidia/Cosmos3-Super), OpenMDW-1.1
 
 The model weights are downloaded to the remote model cache and are not part of this

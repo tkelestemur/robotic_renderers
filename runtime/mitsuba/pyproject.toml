@@ -5,8 +5,8 @@ description = "Pinned Linux/CUDA runtime for the robotic-renderers Mitsuba backe
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "mitsuba==3.9.1",
-  "numpy>=2.5.3,<3",
-  "pillow>=12.3,<13",
+  "numpy>=2.5.4,<3",
+  "pillow>=13,<14",
 ]
 
 [tool.uv]

@@ -1,6 +1,6 @@
 # Remote rendering
 
-ovrtx and CUDA Mitsuba always run remotely. MuJoCo Warp can run locally or through the
+warp-optix, ovrtx, and CUDA Mitsuba always run remotely. MuJoCo Warp can run locally or through the
 same SSH workflow. Commands use the neutral `render-host` placeholder by default.
 
 ## Host selection
@@ -18,7 +18,8 @@ export ROBOTIC_RENDERERS_HOST=render-host
 ```
 
 An explicit `--host` takes precedence. Direct Python calls can instead use the
-adapter-specific `ROBOT_RENDERING_WARP_HOST`, `ROBOT_RENDERING_OVRTX_HOST`,
+adapter-specific `ROBOT_RENDERING_WARP_HOST`, `ROBOT_RENDERING_WARP_OPTIX_HOST`,
+`ROBOT_RENDERING_OVRTX_HOST`,
 `ROBOT_RENDERING_MITSUBA_HOST`, or `ROBOT_RENDERING_COSMOS_HOST`.
 
 The host must be reachable with non-interactive SSH. Configure aliases, users,
@@ -58,9 +59,16 @@ Remote setup creates backend-specific roots:
 | Backend | Default remote root |
 | --- | --- |
 | Warp | `~/.cache/robot_rendering` |
+| Warp + OptiX | `~/.cache/robot_rendering_warp_optix` |
 | ovrtx | `~/code/robot_rendering_ovrtx` |
 | Mitsuba | `~/code/robot_rendering_mitsuba` |
 | Cosmos | `~/code/robot_rendering_cosmos3` |
+
+OptiX setup uses `runtime/warp-optix/uv.lock` and verifies the pinned MuJoCo Warp
+source provenance plus an actual OptiX context. The host needs Linux x86-64, Python
+3.12, and an NVIDIA driver supporting CUDA and OptiX 9.1. The wheel includes the
+required headers; no separate CUDA Toolkit or OptiX SDK installation is needed.
+`--remote-warp` selects remote execution only for ordinary Warp.
 
 Runtime distributions, shader caches, model weights, generated bundles, and worker logs
 stay outside Git. Job directories are unique and should be removed after completion.

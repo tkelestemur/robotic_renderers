@@ -27,20 +27,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from robotic_renderers.defaults import DEFAULT_RENDER_HOST
+from robotic_renderers.registry import backend_names
 from robotic_renderers.remote import ssh_command, validate_ssh_host
 
 ROOT = Path.cwd().resolve()
 REMOTE_ROOT = ".cache/robot_rendering"
+OPTIX_REMOTE_ROOT = ".cache/robot_rendering_warp_optix"
 OVRTX_REMOTE_ROOT = "code/robot_rendering_ovrtx"
 MITSUBA_REMOTE_ROOT = "code/robot_rendering_mitsuba"
 THROUGHPUT_MODULE = "robotic_renderers.benchmarks.throughput"
 RESULT_MAGIC = "ROBOT_RENDERING_FPS_RESULT="
-BLENDER_VERSION = "5.2.1"
+BLENDER_VERSION = "5.3.0"
 BLENDER_ARCHIVE = f"blender-{BLENDER_VERSION}-linux-x64.tar.xz"
-BLENDER_URL = "https://mirror.blender.org/release/Blender5.2/" + BLENDER_ARCHIVE
-BLENDER_SHA256 = "a31f524fa99a527d3d52b7f5aaa68c34e1a19d5a1c9473f79c5cc610fd5b10e9"
+BLENDER_URL = "https://mirror.blender.org/release/Blender5.3/" + BLENDER_ARCHIVE
+BLENDER_SHA256 = "dacb8264197a3f7fda6001285a5a506fc97ee943881261c2c3bd63c882f22e05"
 BLENDER_REMOTE = f".cache/blender/blender-{BLENDER_VERSION}-linux-x64/blender"
-BACKENDS = ("opengl", "warp", "blender", "ovrtx", "mitsuba")
+BACKENDS = backend_names()
 
 
 def _write_text_atomic(path: Path, value: str) -> Path:
@@ -118,14 +120,15 @@ def _extract_result(output: str) -> dict[str, object]:
     raise RuntimeError(f"Remote worker returned no result marker:\n{output[-8000:]}")
 
 
-def _remote_uv_command(arguments: list[str]) -> str:
+def _remote_uv_command(arguments: list[str], *, optix: bool = False) -> str:
     command = [
         ".venv/bin/python",
         "-m",
         THROUGHPUT_MODULE,
         *arguments,
     ]
-    return f'cd "$HOME/{REMOTE_ROOT}" && PYTHONPATH="$PWD/source/src" {shlex.join(command)}'
+    root = OPTIX_REMOTE_ROOT if optix else REMOTE_ROOT
+    return f'cd "$HOME/{root}" && PYTHONPATH="$PWD/source/src" {shlex.join(command)}'
 
 
 def _remote_ovrtx_command(arguments: list[str]) -> str:
@@ -182,8 +185,8 @@ fi
     return {"binary": f"~/{BLENDER_REMOTE}", "version": completed.stdout.strip()}
 
 
-def setup_remote(host: str) -> dict[str, object]:
-    from robotic_renderers.backends import mitsuba, mujoco_warp, ovrtx
+def setup_remote(host: str, *, include_optix: bool = True) -> dict[str, object]:
+    from robotic_renderers.backends import mitsuba, mujoco_warp, mujoco_warp_optix, ovrtx
 
     host = validate_ssh_host(host)
     warp_result = mujoco_warp.setup_remote(host, force=True)
@@ -192,6 +195,7 @@ def setup_remote(host: str) -> dict[str, object]:
     blender = _setup_blender(host)
     return {
         "warp_project": warp_result,
+        **({"warp-optix": mujoco_warp_optix.setup_remote(host)} if include_optix else {}),
         "ovrtx": ovrtx_result,
         "mitsuba": mitsuba_result,
         "blender": blender,
@@ -393,16 +397,18 @@ def _opengl_trial(
     }
 
 
-def _create_warp_context(width: int, height: int, batch: int):
+def _create_warp_context(width: int, height: int, batch: int, ray_backend: str = "warp"):
     import mujoco
     import mujoco_warp as mjw
     import numpy as np
     import warp as wp
 
+    from robotic_renderers.backends.mujoco_warp import _check_ray_backend, _ray_backend_options
     from robotic_renderers.scene import create_model_and_data
 
     wp.init()
     wp.set_device("cuda:0")
+    backend_options = _ray_backend_options(ray_backend)
     model, host_data = create_model_and_data(width=width, height=height)
     warp_model = mjw.put_model(model)
     floor_material_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MATERIAL, "floor_material")
@@ -427,7 +433,9 @@ def _create_warp_context(width: int, height: int, batch: int):
         enable_specular=True,
         enable_emission=True,
         enable_per_light_ambient=True,
+        **backend_options,
     )
+    _check_ray_backend(render_context, ray_backend)
     return {
         "model": model,
         "host_data": host_data,
@@ -453,9 +461,12 @@ def _warp_render(context: dict[str, object], time_s: float) -> None:
     batch = context["batch"]
     set_scene_time(model, host_data, time_s)
     warp_data.geom_xpos.assign(np.repeat(host_data.geom_xpos[None], batch, axis=0))
-    warp_data.geom_xmat.assign(
-        np.repeat(host_data.geom_xmat.reshape(1, model.ngeom, 3, 3), batch, axis=0)
-    )
+    if hasattr(warp_data, "geom_xquat"):
+        warp_data.geom_xquat.assign(np.repeat(host_data.geom_xquat[None], batch, axis=0))
+    else:
+        warp_data.geom_xmat.assign(
+            np.repeat(host_data.geom_xmat.reshape(1, model.ngeom, 3, 3), batch, axis=0)
+        )
     warp_data.cam_xpos.assign(np.repeat(host_data.cam_xpos[None], batch, axis=0))
     warp_data.cam_xmat.assign(
         np.repeat(host_data.cam_xmat.reshape(1, model.ncam, 3, 3), batch, axis=0)
@@ -483,10 +494,11 @@ def _warp_process(
     fps: int,
     start_event,
     queue,
+    ray_backend: str = "warp",
 ) -> None:
     try:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
-        context = _create_warp_context(width, height, batch)
+        context = _create_warp_context(width, height, batch, ray_backend)
         for index in range(warmup):
             _warp_render(context, index / fps)
             _warp_readback(context)
@@ -529,6 +541,7 @@ def _warp_trial(
     steps: int,
     warmup: int,
     fps: int,
+    ray_backend: str = "warp",
 ) -> dict[str, object]:
     context = multiprocessing.get_context("spawn")
     start_event = context.Event()
@@ -537,7 +550,7 @@ def _warp_trial(
     for gpu in gpus:
         process = context.Process(
             target=_warp_process,
-            args=(gpu, width, height, batch, steps, warmup, fps, start_event, queue),
+            args=(gpu, width, height, batch, steps, warmup, fps, start_event, queue, ray_backend),
         )
         process.start()
         processes.append(process)
@@ -558,6 +571,7 @@ def _warp_trial(
     )
     return {
         "batch_per_gpu": batch,
+        "ray_backend": ray_backend,
         "gpu_processes": len(gpus),
         "total_environments": batch * len(gpus),
         "steps": steps,
@@ -1278,7 +1292,11 @@ def _run_trials(values, function) -> list[dict[str, object]]:
 
 def run_suite(args: argparse.Namespace) -> dict[str, object]:
     args.host = validate_ssh_host(args.host)
-    setup = setup_remote(args.host) if not args.no_setup else None
+    setup = (
+        setup_remote(args.host, include_optix="warp-optix" in args.backends)
+        if not args.no_setup
+        else None
+    )
     hardware = _remote_result(args.host, _remote_uv_command(["__hardware"]))
     available_gpus = [int(gpu["index"]) for gpu in hardware["gpus"]]
     gpus = args.gpus if args.gpus is not None else available_gpus
@@ -1323,16 +1341,22 @@ def run_suite(args: argparse.Namespace) -> dict[str, object]:
             "trials": trials,
             "best": _best_trial(trials),
         }
-    if "warp" in args.backends:
+    for backend in ("warp", "warp-optix"):
+        if backend not in args.backends:
+            continue
+        ray_backend = "optix" if backend == "warp-optix" else "warp"
         trials = _run_trials(
             args.warp_batches,
-            lambda batch: _remote_result(
+            lambda batch, ray_backend=ray_backend: _remote_result(
                 args.host,
-                _remote_uv_command(["__warp", "--batch", str(batch), *common]),
+                _remote_uv_command(
+                    ["__warp", "--ray-backend", ray_backend, "--batch", str(batch), *common],
+                    optix=ray_backend == "optix",
+                ),
                 timeout=1800,
             ),
         )
-        results["warp"] = {
+        results[backend] = {
             "strategy": "one batched nworld renderer per GPU",
             "trials": trials,
             "best": _best_trial(trials),
@@ -1491,7 +1515,7 @@ def _format_number(value: object) -> str:
 
 
 def _trial_label(backend: str, trial: dict[str, object]) -> str:
-    if backend == "warp":
+    if backend in ("warp", "warp-optix"):
         return f"batch {trial['batch_per_gpu']} × {trial['gpu_processes']} GPUs"
     if backend == "ovrtx":
         return f"tile {trial['batch_per_gpu']} × {trial['gpu_processes']} GPU processes"
@@ -1580,7 +1604,7 @@ def format_markdown(result: dict[str, object]) -> str:
                 )
                 continue
             name = _trial_label(backend, trial)
-            if backend in {"warp", "ovrtx"}:
+            if backend in {"warp", "warp-optix", "ovrtx"}:
                 count = trial["total_environments"]
             else:
                 count = trial["workers"]
@@ -1664,7 +1688,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=[1, 2, 4, 8, 16, 32, 64, 128],
     )
     parser.add_argument(
-        "--warp-batches", type=_parse_positive_ints, default=[1, 4, 16, 64, 128, 256]
+        "--warp-batches",
+        type=_parse_positive_ints,
+        default=[1, 4, 16, 64, 128, 256],
+        help="Batch sizes per GPU for both Warp and warp-optix",
     )
     parser.add_argument(
         "--blender-workers",
@@ -1780,6 +1807,7 @@ def _run_internal(arguments: list[str]) -> int:
         return 0
     if mode == "__warp":
         parser.add_argument("--batch", type=int, required=True)
+        parser.add_argument("--ray-backend", choices=["warp", "optix"], default="warp")
         args = parser.parse_args(arguments[1:])
         _emit_result(
             _warp_trial(
@@ -1790,6 +1818,7 @@ def _run_internal(arguments: list[str]) -> int:
                 args.frames,
                 args.warmup,
                 args.fps,
+                ray_backend=args.ray_backend,
             )
         )
         return 0

@@ -4,14 +4,14 @@ version = "0.1.0"
 description = "Pinned Linux/CUDA runtime for the robotic-renderers Warp worker"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "imageio==2.37.4",
-  "imageio-ffmpeg==0.6.0",
-  "mujoco==3.13.0",
-  "mujoco-warp==3.13.0",
-  "numpy==2.5.3",
-  "pillow==12.3.0",
-  "usd-core==26.8",
-  "warp-lang==1.17.0",
+  "imageio==2.38.1",
+  "imageio-ffmpeg==0.8.1",
+  "mujoco==4.0.1",
+  "mujoco-warp==4.0.1",
+  "numpy==2.5.4",
+  "pillow==13.0.0",
+  "usd-core==26.11",
+  "warp-lang==1.19.0",
 ]
 
 [tool.uv]

@@ -37,7 +37,9 @@ field.
 The harness scales backends according to their execution models:
 
 - OpenGL uses independent headless EGL contexts.
-- Warp batches multiple worlds per GPU.
+- Warp and warp-optix batch multiple worlds per GPU using the same `--warp-batches`
+  sweep. OptiX uses its isolated runtime and rejects traversal fallback. These are
+  direct-light renderers; the shared path-tracing sample count does not apply.
 - Blender distributes frames across persistent isolated workers.
 - ovrtx uses GPU-pinned tiled render products.
 - Mitsuba distributes persistent CUDA path-tracing workers.

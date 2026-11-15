@@ -14,11 +14,12 @@ from robotic_renderers.workflows import cosmos3 as render_cosmos3
 def _minimal_warp_source(root: Path) -> None:
     for name in ("pyproject.toml", "uv.lock"):
         (root / name).write_text(f"# root {name} must not be uploaded\n")
-    runtime = root / "runtime" / "warp"
-    runtime.mkdir(parents=True)
-    (runtime / "pyproject.toml").write_text("[project]\nname='warp-runtime'\n")
-    (runtime / "uv.lock").write_text("version = 1\n")
-    (runtime / "README.md").write_text("# Warp runtime\n")
+    for name in ("warp", "warp-optix"):
+        runtime = root / "runtime" / name
+        runtime.mkdir(parents=True)
+        (runtime / "pyproject.toml").write_text(f"[project]\nname='{name}-runtime'\n")
+        (runtime / "uv.lock").write_text("version = 1\n")
+        (runtime / "README.md").write_text("# Warp runtime\n")
     backend = root / "src" / "robotic_renderers" / "backends"
     backend.mkdir(parents=True)
     (root / "src" / "robotic_renderers" / "__init__.py").write_text("")
@@ -26,7 +27,7 @@ def _minimal_warp_source(root: Path) -> None:
     (backend / "mujoco_warp.py").write_text("# mujoco_warp.py\n")
 
 
-def _minimal_installed_warp_package(package: Path) -> Path:
+def _minimal_installed_warp_package(package: Path, name: str = "warp") -> Path:
     backend = package / "backends"
     backend.mkdir(parents=True)
     (package / "__init__.py").write_text("")
@@ -35,7 +36,7 @@ def _minimal_installed_warp_package(package: Path) -> Path:
     fr3 = package / "data" / "franka_fr3"
     fr3.mkdir(parents=True)
     (fr3 / "fr3.xml").write_text("<mujoco/>\n")
-    runtime = package / "data" / "runtime" / "warp"
+    runtime = package / "data" / "runtime" / name
     runtime.mkdir(parents=True)
     (runtime / "pyproject.toml").write_text("[project]\nname='warp-runtime'\n")
     (runtime / "uv.lock").write_text("version = 1\n")
@@ -55,7 +56,8 @@ def test_remote_commands_use_noninteractive_keepalive_options():
         assert command[-2:] == ["gpu-host", "true"]
 
 
-def test_warp_bundle_stages_only_explicit_safe_sources(tmp_path: Path):
+@pytest.mark.parametrize(("ray_backend", "runtime"), (("warp", "warp"), ("optix", "warp-optix")))
+def test_warp_bundle_stages_only_explicit_safe_sources(tmp_path: Path, ray_backend, runtime):
     root = tmp_path / "repository"
     root.mkdir()
     _minimal_warp_source(root)
@@ -73,14 +75,16 @@ def test_warp_bundle_stages_only_explicit_safe_sources(tmp_path: Path):
     (root / "credentials.json").write_text('{"token": "secret"}\n')
 
     staged = tmp_path / "staged"
-    entries = render_mujoco_warp._stage_remote_bundle(staged, root)
+    entries = render_mujoco_warp._stage_remote_bundle(staged, root, ray_backend)
     relative_entries = {path.as_posix() for path in entries}
 
     assert "src/robotic_renderers/backends/mujoco_warp.py" in relative_entries
     assert "src/robotic_renderers/__init__.py" in relative_entries
-    assert "runtime/warp/pyproject.toml" in relative_entries
-    assert "runtime/warp/uv.lock" in relative_entries
-    assert "runtime/warp/README.md" in relative_entries
+    assert f"runtime/{runtime}/pyproject.toml" in relative_entries
+    assert f"runtime/{runtime}/uv.lock" in relative_entries
+    assert f"runtime/{runtime}/README.md" in relative_entries
+    other_runtime = "warp" if runtime == "warp-optix" else "warp-optix"
+    assert f"runtime/{other_runtime}/uv.lock" not in relative_entries
     assert "third_party/fr3/link0.obj" in relative_entries
     assert "pyproject.toml" not in relative_entries
     assert "uv.lock" not in relative_entries
@@ -102,22 +106,23 @@ def test_warp_bundle_fingerprint_changes_with_source(tmp_path: Path):
     assert render_mujoco_warp._remote_bundle_fingerprint(tmp_path) != first
 
 
-def test_installed_warp_bundle_reconstructs_remote_source_layout(tmp_path: Path):
+@pytest.mark.parametrize(("ray_backend", "name"), (("warp", "warp"), ("optix", "warp-optix")))
+def test_installed_warp_bundle_reconstructs_remote_source_layout(tmp_path: Path, ray_backend, name):
     package = tmp_path / "site-packages" / "robotic_renderers"
-    runtime = _minimal_installed_warp_package(package)
+    runtime = _minimal_installed_warp_package(package, name)
     (package / ".env").write_text("TOKEN=secret\n")
     unrelated = package / "data" / "runtime" / "ovrtx"
     unrelated.mkdir(parents=True)
     (unrelated / "uv.lock").write_text("version = 1\n")
 
-    sources = render_mujoco_warp._installed_bundle_sources(package, runtime)
+    sources = render_mujoco_warp._installed_bundle_sources(package, runtime, ray_backend)
     entries = {path.as_posix() for path in sources}
 
     assert "src/robotic_renderers/__init__.py" in entries
     assert "src/robotic_renderers/backends/mujoco_warp.py" in entries
     assert "src/robotic_renderers/data/franka_fr3/fr3.xml" in entries
-    assert "runtime/warp/pyproject.toml" in entries
-    assert "runtime/warp/uv.lock" in entries
+    assert f"runtime/{name}/pyproject.toml" in entries
+    assert f"runtime/{name}/uv.lock" in entries
     assert "src/robotic_renderers/.env" not in entries
     assert "src/robotic_renderers/data/runtime/ovrtx/uv.lock" not in entries
 
@@ -154,14 +159,14 @@ def test_warp_runtime_is_pinned_and_linux_only():
 
     assert project["project"]["requires-python"] == ">=3.12,<3.13"
     assert project["project"]["dependencies"] == [
-        "imageio==2.37.4",
-        "imageio-ffmpeg==0.6.0",
-        "mujoco==3.13.0",
-        "mujoco-warp==3.13.0",
-        "numpy==2.5.3",
-        "pillow==12.3.0",
-        "usd-core==26.8",
-        "warp-lang==1.17.0",
+        "imageio==2.38.1",
+        "imageio-ffmpeg==0.8.1",
+        "mujoco==4.0.1",
+        "mujoco-warp==4.0.1",
+        "numpy==2.5.4",
+        "pillow==13.0.0",
+        "usd-core==26.11",
+        "warp-lang==1.19.0",
     ]
     assert lock["requires-python"] == "==3.12.*"
     assert lock["supported-markers"] == ["platform_machine == 'x86_64' and sys_platform == 'linux'"]
@@ -267,18 +272,18 @@ def test_remote_warp_recording_preserves_worker_timing(tmp_path: Path, monkeypat
         "render_fps": 4.0,
         "video_fps": 2,
     }
-    monkeypatch.setattr(render_mujoco_warp, "setup_remote", lambda host: None)
+    monkeypatch.setattr(render_mujoco_warp, "setup_remote", lambda host, **kwargs: None)
     monkeypatch.setattr(
         render_mujoco_warp,
         "_run_remote_worker",
-        lambda host, arguments: worker_result,
+        lambda host, arguments, **kwargs: worker_result,
     )
     monkeypatch.setattr(
         render_mujoco_warp,
         "_copy_remote_output",
-        lambda host, remote_path, output_path: Path(output_path),
+        lambda host, remote_path, output_path, **kwargs: Path(output_path),
     )
-    monkeypatch.setattr(render_mujoco_warp, "_cleanup_remote_job", lambda *args: None)
+    monkeypatch.setattr(render_mujoco_warp, "_cleanup_remote_job", lambda *args, **kwargs: None)
 
     result = render_mujoco_warp.record_video(
         tmp_path / "remote-warp.mp4",

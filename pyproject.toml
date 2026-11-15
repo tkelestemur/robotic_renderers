@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.32"]
+requires = ["hatchling>=1.33"]
 build-backend = "hatchling.build"
 
 [project]
@@ -39,26 +39,30 @@ classifiers = [
   "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-  "imageio>=2.37.4,<3",
-  "imageio-ffmpeg>=0.6.0,<0.7",
-  "mujoco==3.13.0",
-  "numpy>=2.5.3,<3",
-  "pillow>=12.3,<13",
+  "imageio>=2.38.1,<3",
+  "imageio-ffmpeg>=0.8.1,<0.9",
+  "mujoco==4.0.1",
+  "numpy>=2.5.4,<3",
+  "pillow>=13,<14",
   "pygame-ce>=2.5.8,<3",
 ]
 
 [project.optional-dependencies]
 all = [
-  "mujoco-warp==3.13.0",
-  "usd-core==26.8",
-  "warp-lang==1.17.0",
+  "mujoco-warp==4.0.1",
+  "usd-core==26.11",
+  "warp-lang==1.19.0",
 ]
 ovrtx = [
-  "usd-core==26.8",
+  "usd-core==26.11",
 ]
 warp = [
-  "mujoco-warp==3.13.0",
-  "warp-lang==1.17.0",
+  "mujoco-warp==4.0.1",
+  "warp-lang==1.19.0",
+]
+warp-optix = [
+  "mujoco-warp==4.0.1",
+  "warp-lang==1.19.0",
 ]
 
 [project.scripts]
@@ -73,14 +77,14 @@ Repository = "https://github.com/tkelestemur/robotic_renderers"
 
 [dependency-groups]
 dev = [
-  "pytest>=9.1.1,<10",
+  "pytest>=9.2,<10",
   "pytest-cov>=7.1,<8",
-  "ruff>=0.16.6,<1",
+  "ruff>=0.17.5,<1",
 ]
 renderers = [
-  "mujoco-warp==3.13.0",
-  "usd-core==26.8",
-  "warp-lang==1.17.0",
+  "mujoco-warp==4.0.1",
+  "usd-core==26.11",
+  "warp-lang==1.19.0",
 ]
 
 [tool.uv]
@@ -114,6 +118,7 @@ packages = ["src/robotic_renderers"]
 "runtime/mitsuba" = "robotic_renderers/data/runtime/mitsuba"
 "runtime/ovrtx" = "robotic_renderers/data/runtime/ovrtx"
 "runtime/warp" = "robotic_renderers/data/runtime/warp"
+"runtime/warp-optix" = "robotic_renderers/data/runtime/warp-optix"
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers"

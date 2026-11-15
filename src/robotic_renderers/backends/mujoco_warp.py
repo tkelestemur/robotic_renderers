@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import shlex
@@ -65,8 +66,6 @@ REMOTE_BUNDLE_FILES = (
     "LICENSE",
     "THIRD_PARTY.md",
 )
-REMOTE_RUNTIME_DIRECTORY = Path("runtime/warp")
-REMOTE_BUNDLE_DIRECTORIES = (REMOTE_RUNTIME_DIRECTORY, Path("src"), Path("third_party"))
 REMOTE_BUNDLE_EXCLUDED_PARTS = {
     ".cache",
     ".git",
@@ -92,9 +91,25 @@ REMOTE_BUNDLE_SENSITIVE_NAMES = {
     "id_rsa",
 }
 REMOTE_BUNDLE_SENSITIVE_SUFFIXES = (".key", ".p12", ".pem", ".pfx", ".pyc", ".pyo")
-_SYNCED_HOSTS: dict[str, str] = {}
+_SYNCED_HOSTS: dict[tuple[str, str], str] = {}
 PACKAGE_SOURCE = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = PACKAGE_SOURCE.parents[1]
+
+
+def _backend_name(ray_backend: str) -> str:
+    if ray_backend not in ("warp", "optix"):
+        raise ValueError(f"Unknown Warp ray backend: {ray_backend}")
+    return "warp-optix" if ray_backend == "optix" else BACKEND_NAME
+
+
+def _runtime_directory(ray_backend: str) -> Path:
+    return Path("runtime") / _backend_name(ray_backend)
+
+
+def _remote_root(ray_backend: str) -> str:
+    if _backend_name(ray_backend) == "warp-optix":
+        return ".cache/robot_rendering_warp_optix"
+    return REMOTE_ROOT
 
 
 def _find_repository_root() -> Path | None:
@@ -142,11 +157,12 @@ def _bundle_path_is_safe(relative_path: Path) -> bool:
     return not name.lower().endswith(REMOTE_BUNDLE_SENSITIVE_SUFFIXES)
 
 
-def _source_bundle_sources(root: Path) -> dict[Path, Path]:
+def _source_bundle_sources(root: Path, ray_backend: str = "warp") -> dict[Path, Path]:
     root = root.resolve()
+    runtime_directory = _runtime_directory(ray_backend)
     required = (
-        REMOTE_RUNTIME_DIRECTORY / "pyproject.toml",
-        REMOTE_RUNTIME_DIRECTORY / "uv.lock",
+        runtime_directory / "pyproject.toml",
+        runtime_directory / "uv.lock",
         Path("src/robotic_renderers/backends/mujoco_warp.py"),
         Path("src/robotic_renderers/scene.py"),
     )
@@ -159,7 +175,7 @@ def _source_bundle_sources(root: Path) -> dict[Path, Path]:
         relative_path = Path(name)
         if (root / relative_path).is_file() and _bundle_path_is_safe(relative_path):
             sources[relative_path] = root / relative_path
-    for relative_directory in REMOTE_BUNDLE_DIRECTORIES:
+    for relative_directory in (runtime_directory, Path("src"), Path("third_party")):
         directory = root / relative_directory
         if not directory.is_dir():
             continue
@@ -174,6 +190,7 @@ def _source_bundle_sources(root: Path) -> dict[Path, Path]:
 def _installed_bundle_sources(
     package_source: Path = PACKAGE_SOURCE,
     runtime_project: Path | None = None,
+    ray_backend: str = "warp",
 ) -> dict[Path, Path]:
     """Map installed package files back into the remote source layout."""
     package_source = package_source.resolve()
@@ -181,7 +198,7 @@ def _installed_bundle_sources(
         runtime_project = resolve_runtime_project(
             package_source,
             package_source.parents[1],
-            BACKEND_NAME,
+            _backend_name(ray_backend),
         )
     runtime_project = runtime_project.resolve()
     required = (
@@ -210,29 +227,31 @@ def _installed_bundle_sources(
             sources[relative_path] = source
     for source in runtime_project.rglob("*"):
         if source.is_file() or source.is_symlink():
-            relative_path = REMOTE_RUNTIME_DIRECTORY / source.relative_to(runtime_project)
+            relative_path = _runtime_directory(ray_backend) / source.relative_to(runtime_project)
             if _bundle_path_is_safe(relative_path):
                 sources[relative_path] = source
     return sources
 
 
-def _remote_bundle_sources(root: Path | None = None) -> dict[Path, Path]:
+def _remote_bundle_sources(root: Path | None = None, ray_backend: str = "warp") -> dict[Path, Path]:
     if root is not None:
-        return _source_bundle_sources(root)
+        return _source_bundle_sources(root, ray_backend)
     checkout = _find_repository_root()
     if checkout is not None:
-        return _source_bundle_sources(checkout)
-    return _installed_bundle_sources()
+        return _source_bundle_sources(checkout, ray_backend)
+    return _installed_bundle_sources(ray_backend=ray_backend)
 
 
-def _remote_bundle_entries(root: Path | None = None) -> tuple[Path, ...]:
+def _remote_bundle_entries(root: Path | None = None, ray_backend: str = "warp") -> tuple[Path, ...]:
     """Return the explicit, secret-resistant file manifest sent to the Warp host."""
-    return tuple(sorted(_remote_bundle_sources(root), key=lambda path: path.as_posix()))
+    return tuple(
+        sorted(_remote_bundle_sources(root, ray_backend), key=lambda path: path.as_posix())
+    )
 
 
-def _remote_bundle_fingerprint(root: Path | None = None) -> str:
+def _remote_bundle_fingerprint(root: Path | None = None, ray_backend: str = "warp") -> str:
     digest = hashlib.sha256()
-    sources = _remote_bundle_sources(root)
+    sources = _remote_bundle_sources(root, ray_backend)
     for relative_path in sorted(sources, key=lambda path: path.as_posix()):
         source = sources[relative_path]
         digest.update(relative_path.as_posix().encode())
@@ -248,10 +267,11 @@ def _remote_bundle_fingerprint(root: Path | None = None) -> str:
 def _stage_remote_bundle(
     destination: Path,
     root: Path | None = None,
+    ray_backend: str = "warp",
 ) -> tuple[Path, ...]:
     """Copy only the manifest into an isolated rsync source directory."""
     destination.mkdir(parents=True, exist_ok=True)
-    sources = _remote_bundle_sources(root)
+    sources = _remote_bundle_sources(root, ray_backend)
     entries = tuple(sorted(sources, key=lambda path: path.as_posix()))
     for relative_path in entries:
         source = sources[relative_path]
@@ -267,14 +287,16 @@ def _stage_remote_bundle(
     return entries
 
 
-def _remote_shell_command(arguments: list[str]) -> str:
-    remote_root = f"$HOME/{REMOTE_ROOT}"
+def _remote_shell_command(arguments: list[str], ray_backend: str = "warp") -> str:
+    remote_root = f"$HOME/{_remote_root(ray_backend)}"
     worker = shlex.join(
         [
             f"{remote_root}/.venv/bin/python",
             "-m",
             "robotic_renderers.backends.mujoco_warp",
             "__worker",
+            "--ray-backend",
+            ray_backend,
             *arguments,
         ]
     )
@@ -286,12 +308,12 @@ def _remote_shell_command(arguments: list[str]) -> str:
     )
 
 
-def _remote_sync_script(incoming: str) -> str:
+def _remote_sync_script(incoming: str, ray_backend: str = "warp") -> str:
     return f"""set -euo pipefail
 umask 077
-root="$HOME/{REMOTE_ROOT}"
+root="$HOME/{_remote_root(ray_backend)}"
 incoming="$root/{incoming}"
-runtime="$incoming/{REMOTE_RUNTIME_DIRECTORY.as_posix()}"
+runtime="$incoming/{_runtime_directory(ray_backend).as_posix()}"
 test -f "$runtime/pyproject.toml"
 test -f "$runtime/uv.lock"
 exec 9>"$root/sync.lock"
@@ -325,10 +347,14 @@ def backend_status(host: str = DEFAULT_HOST) -> dict[str, object]:
     }
 
 
-def setup_remote(host: str = DEFAULT_HOST, force: bool = False) -> dict[str, object]:
+def setup_remote(
+    host: str = DEFAULT_HOST, force: bool = False, *, ray_backend: str = "warp"
+) -> dict[str, object]:
     host = validate_ssh_host(host)
-    fingerprint = _remote_bundle_fingerprint()
-    if _SYNCED_HOSTS.get(host) == fingerprint and not force:
+    remote_root = _remote_root(ray_backend)
+    fingerprint = _remote_bundle_fingerprint(ray_backend=ray_backend)
+    cache_key = (host, ray_backend)
+    if _SYNCED_HOSTS.get(cache_key) == fingerprint and not force:
         return {"host": host, "synced": True, "cached": True}
 
     uv_probe = subprocess.run(
@@ -345,20 +371,20 @@ def setup_remote(host: str = DEFAULT_HOST, force: bool = False) -> dict[str, obj
 
     upload_id = uuid.uuid4().hex
     incoming = f"source.upload-{upload_id}"
-    remote_incoming = f"{host}:~/{REMOTE_ROOT}/{incoming}/"
+    remote_incoming = f"{host}:~/{remote_root}/{incoming}/"
     _run(
         _ssh_command(
             host,
-            f'umask 077; install -d -m 700 "$HOME/{REMOTE_ROOT}" '
-            f'"$HOME/{REMOTE_ROOT}/.jobs" "$HOME/{REMOTE_ROOT}/{incoming}"; '
-            f'chmod 700 "$HOME/{REMOTE_ROOT}" "$HOME/{REMOTE_ROOT}/.jobs" '
-            f'"$HOME/{REMOTE_ROOT}/{incoming}"',
+            f'umask 077; install -d -m 700 "$HOME/{remote_root}" '
+            f'"$HOME/{remote_root}/.jobs" "$HOME/{remote_root}/{incoming}"; '
+            f'chmod 700 "$HOME/{remote_root}" "$HOME/{remote_root}/.jobs" '
+            f'"$HOME/{remote_root}/{incoming}"',
         )
     )
     try:
         with tempfile.TemporaryDirectory(prefix="robot-rendering-warp-bundle-") as temporary:
             bundle = Path(temporary) / "source"
-            _stage_remote_bundle(bundle)
+            _stage_remote_bundle(bundle, ray_backend=ray_backend)
             _run(
                 [
                     "rsync",
@@ -371,18 +397,43 @@ def setup_remote(host: str = DEFAULT_HOST, force: bool = False) -> dict[str, obj
             )
         _run(
             _ssh_command(host, "bash -s"),
-            input=_remote_sync_script(incoming),
+            input=_remote_sync_script(incoming, ray_backend),
             text=True,
         )
     finally:
         subprocess.run(
-            _ssh_command(host, f'rm -rf "$HOME/{REMOTE_ROOT}/{incoming}"'),
+            _ssh_command(host, f'rm -rf "$HOME/{remote_root}/{incoming}"'),
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-    _SYNCED_HOSTS[host] = fingerprint
+    if ray_backend == "optix":
+        _run_remote_worker(host, ["status"], ray_backend=ray_backend)
+    _SYNCED_HOSTS[cache_key] = fingerprint
     return {"host": host, "synced": True, "cached": False}
+
+
+def _ray_backend_options(ray_backend: str) -> dict[str, str]:
+    """Keep released Warp compatible while requiring explicit OptiX support."""
+    _backend_name(ray_backend)
+    if ray_backend == "warp":
+        return {}
+    if not wp.is_cuda_available() or not wp.get_device().is_cuda:
+        raise RuntimeError("warp-optix requires an NVIDIA CUDA/OptiX GPU; CPU fallback is disabled")
+    if "backend" not in inspect.signature(mjw.create_render_context).parameters:
+        raise RuntimeError(
+            "This MuJoCo Warp build lacks OptiX support. "
+            "Run setup --backend warp-optix to install the pinned isolated runtime."
+        )
+    return {"backend": "optix"}
+
+
+def _check_ray_backend(render_context, ray_backend: str) -> None:
+    if ray_backend == "optix" and getattr(render_context, "backend", None) != "optix":
+        raise RuntimeError(
+            "MuJoCo Warp fell back from OptiX to Warp. Check warp-optix, the NVIDIA driver, "
+            "and scene support; refusing to label fallback rendering as warp-optix."
+        )
 
 
 def create_renderer(
@@ -390,6 +441,8 @@ def create_renderer(
     height: int = DEFAULT_HEIGHT,
     supersample: int = 2,
     device: str | None = None,
+    *,
+    ray_backend: str = "warp",
 ) -> dict[str, object]:
     if supersample < 1:
         raise ValueError("supersample must be at least 1")
@@ -397,6 +450,7 @@ def create_renderer(
     if device is None:
         device = "cuda:0" if wp.is_cuda_available() else "cpu"
     wp.set_device(device)
+    backend_options = _ray_backend_options(ray_backend)
 
     render_width = width * supersample
     render_height = height * supersample
@@ -426,7 +480,9 @@ def create_renderer(
         enable_specular=True,
         enable_emission=True,
         enable_per_light_ambient=True,
+        **backend_options,
     )
+    _check_ray_backend(render_context, ray_backend)
     rgb = wp.empty((1, render_height, render_width), dtype=wp.vec3)
     return {
         "model": model,
@@ -441,6 +497,7 @@ def create_renderer(
         "render_width": render_width,
         "render_height": render_height,
         "supersample": supersample,
+        "ray_backend": ray_backend,
     }
 
 
@@ -449,9 +506,12 @@ def _copy_kinematics_to_warp(context: dict[str, object]) -> None:
     host_data = context["host_data"]
     warp_data = context["warp_data"]
     warp_data.geom_xpos.assign(np.asarray(host_data.geom_xpos, dtype=np.float32)[None])
-    warp_data.geom_xmat.assign(
-        np.asarray(host_data.geom_xmat, dtype=np.float32).reshape(1, model.ngeom, 3, 3)
-    )
+    if hasattr(warp_data, "geom_xquat"):
+        warp_data.geom_xquat.assign(np.asarray(host_data.geom_xquat, dtype=np.float32)[None])
+    else:
+        warp_data.geom_xmat.assign(
+            np.asarray(host_data.geom_xmat, dtype=np.float32).reshape(1, model.ngeom, 3, 3)
+        )
     warp_data.cam_xpos.assign(np.asarray(host_data.cam_xpos, dtype=np.float32)[None])
     warp_data.cam_xmat.assign(
         np.asarray(host_data.cam_xmat, dtype=np.float32).reshape(1, model.ncam, 3, 3)
@@ -479,8 +539,12 @@ def render_frame_local(
     time_s: float = 1.0,
     supersample: int = 2,
     device: str | None = None,
+    *,
+    ray_backend: str = "warp",
 ) -> np.ndarray:
-    context = create_renderer(width, height, supersample=supersample, device=device)
+    context = create_renderer(
+        width, height, supersample=supersample, device=device, ray_backend=ray_backend
+    )
     return render_context_frame(context, time_s=time_s)
 
 
@@ -491,14 +555,18 @@ def render_frame(
     supersample: int = 2,
     host: str = DEFAULT_HOST,
     local: bool = True,
+    *,
+    ray_backend: str = "warp",
 ) -> np.ndarray:
     if local:
-        return render_frame_local(width, height, time_s, supersample)
+        return render_frame_local(width, height, time_s, supersample, ray_backend=ray_backend)
     from PIL import Image
 
     with tempfile.TemporaryDirectory(prefix="mujoco-warp-frame-") as temporary:
         output = Path(temporary) / "frame.png"
-        render_still(output, width, height, time_s, supersample, host, local=False)
+        render_still(
+            output, width, height, time_s, supersample, host, local=False, ray_backend=ray_backend
+        )
         return np.asarray(Image.open(output).convert("RGB"))
 
 
@@ -509,12 +577,14 @@ def render_still_local(
     time_s: float = 1.0,
     supersample: int = 2,
     device: str | None = None,
+    *,
+    ray_backend: str = "warp",
 ) -> dict[str, object]:
     started = time.perf_counter()
-    image = render_frame_local(width, height, time_s, supersample, device)
+    image = render_frame_local(width, height, time_s, supersample, device, ray_backend=ray_backend)
     output = write_png(image, output_path)
     return {
-        "backend": BACKEND_NAME,
+        "backend": _backend_name(ray_backend),
         "output": str(output),
         "seconds": time.perf_counter() - started,
         "sha256": image_digest(image),
@@ -549,8 +619,12 @@ def record_video_local(
     height: int = DEFAULT_HEIGHT,
     supersample: int = 2,
     device: str | None = None,
+    *,
+    ray_backend: str = "warp",
 ) -> dict[str, object]:
-    context = create_renderer(width, height, supersample=supersample, device=device)
+    context = create_renderer(
+        width, height, supersample=supersample, device=device, ray_backend=ray_backend
+    )
     timing: dict[str, float] = {}
     output, frame_count, total_seconds = write_video(
         _finite_frames(context, duration=duration, fps=fps, timing=timing),
@@ -560,7 +634,7 @@ def record_video_local(
     render_seconds = timing.get("render_seconds", 0.0)
     encode_seconds = max(0.0, total_seconds - render_seconds)
     return {
-        "backend": BACKEND_NAME,
+        "backend": _backend_name(ray_backend),
         "output": str(output),
         "frames": frame_count,
         "seconds": total_seconds,
@@ -583,9 +657,13 @@ def benchmark_local(
     warmup: int = 3,
     supersample: int = 1,
     device: str | None = None,
+    *,
+    ray_backend: str = "warp",
 ) -> dict[str, object]:
     init_started = time.perf_counter()
-    context = create_renderer(width, height, supersample=supersample, device=device)
+    context = create_renderer(
+        width, height, supersample=supersample, device=device, ray_backend=ray_backend
+    )
     init_seconds = time.perf_counter() - init_started
     for index in range(warmup):
         render_context_frame(context, index / fps)
@@ -595,7 +673,7 @@ def benchmark_local(
         last = render_context_frame(context, index / fps)
     render_seconds = time.perf_counter() - started
     return {
-        "backend": BACKEND_NAME,
+        "backend": _backend_name(ray_backend),
         "device": context["device"],
         "width": width,
         "height": height,
@@ -615,31 +693,36 @@ def _parse_remote_result(stdout: str) -> dict[str, object]:
     raise RuntimeError(f"Remote worker returned no result marker. Output:\n{stdout[-4000:]}")
 
 
-def _run_remote_worker(host: str, arguments: list[str]) -> dict[str, object]:
+def _run_remote_worker(
+    host: str, arguments: list[str], *, ray_backend: str = "warp", timeout: float | None = None
+) -> dict[str, object]:
     completed = _run(
-        _ssh_command(host, _remote_shell_command(arguments)),
+        _ssh_command(host, _remote_shell_command(arguments, ray_backend)),
         capture_output=True,
         text=True,
+        timeout=timeout,
     )
     return _parse_remote_result(completed.stdout)
 
 
-def _copy_remote_output(host: str, remote_path: str, output_path: str | Path) -> Path:
+def _copy_remote_output(
+    host: str, remote_path: str, output_path: str | Path, *, ray_backend: str = "warp"
+) -> Path:
     with atomic_output_path(output_path) as (temporary, output):
         _run(
             [
                 "scp",
                 *SSH_OPTIONS,
-                f"{validate_ssh_host(host)}:~/{REMOTE_ROOT}/{remote_path}",
+                f"{validate_ssh_host(host)}:~/{_remote_root(ray_backend)}/{remote_path}",
                 str(temporary),
             ]
         )
     return output
 
 
-def _cleanup_remote_job(host: str, job_id: str) -> None:
+def _cleanup_remote_job(host: str, job_id: str, *, ray_backend: str = "warp") -> None:
     subprocess.run(
-        _ssh_command(host, f'rm -rf "$HOME/{REMOTE_ROOT}/.jobs/{job_id}"'),
+        _ssh_command(host, f'rm -rf "$HOME/{_remote_root(ray_backend)}/.jobs/{job_id}"'),
         check=False,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -654,10 +737,14 @@ def render_still(
     supersample: int = 2,
     host: str = DEFAULT_HOST,
     local: bool = True,
+    *,
+    ray_backend: str = "warp",
 ) -> dict[str, object]:
     if local:
-        return render_still_local(output_path, width, height, time_s, supersample)
-    setup_remote(host)
+        return render_still_local(
+            output_path, width, height, time_s, supersample, ray_backend=ray_backend
+        )
+    setup_remote(host, ray_backend=ray_backend)
     job_id = uuid.uuid4().hex
     remote_output = f".jobs/{job_id}/frame.png"
     started = time.perf_counter()
@@ -677,10 +764,11 @@ def render_still(
                 "--supersample",
                 str(supersample),
             ],
+            ray_backend=ray_backend,
         )
-        output = _copy_remote_output(host, remote_output, output_path)
+        output = _copy_remote_output(host, remote_output, output_path, ray_backend=ray_backend)
     finally:
-        _cleanup_remote_job(host, job_id)
+        _cleanup_remote_job(host, job_id, ray_backend=ray_backend)
     return {
         **result,
         "output": str(output),
@@ -698,12 +786,20 @@ def record_video(
     supersample: int = 2,
     host: str = DEFAULT_HOST,
     local: bool = True,
+    *,
+    ray_backend: str = "warp",
 ) -> dict[str, object]:
     if local:
         return record_video_local(
-            output_path, duration, fps, width, height, supersample=supersample
+            output_path,
+            duration,
+            fps,
+            width,
+            height,
+            supersample=supersample,
+            ray_backend=ray_backend,
         )
-    setup_remote(host)
+    setup_remote(host, ray_backend=ray_backend)
     job_id = uuid.uuid4().hex
     remote_output = f".jobs/{job_id}/video.mp4"
     started = time.perf_counter()
@@ -725,10 +821,11 @@ def record_video(
                 "--supersample",
                 str(supersample),
             ],
+            ray_backend=ray_backend,
         )
-        output = _copy_remote_output(host, remote_output, output_path)
+        output = _copy_remote_output(host, remote_output, output_path, ray_backend=ray_backend)
     finally:
-        _cleanup_remote_job(host, job_id)
+        _cleanup_remote_job(host, job_id, ray_backend=ray_backend)
     return {
         **result,
         "output": str(output),
@@ -746,10 +843,20 @@ def benchmark(
     supersample: int = 1,
     host: str = DEFAULT_HOST,
     local: bool = True,
+    *,
+    ray_backend: str = "warp",
 ) -> dict[str, object]:
     if local:
-        return benchmark_local(frame_count, width, height, fps, warmup, supersample=supersample)
-    setup_remote(host)
+        return benchmark_local(
+            frame_count,
+            width,
+            height,
+            fps,
+            warmup,
+            supersample=supersample,
+            ray_backend=ray_backend,
+        )
+    setup_remote(host, ray_backend=ray_backend)
     result = _run_remote_worker(
         host,
         [
@@ -767,6 +874,7 @@ def benchmark(
             "--supersample",
             str(supersample),
         ],
+        ray_backend=ray_backend,
     )
     return {**result, "host": host}
 
@@ -778,6 +886,8 @@ def _remote_stream_frames(
     fps: int,
     duration: float | None,
     supersample: int,
+    *,
+    ray_backend: str = "warp",
 ):
     arguments = [
         "stream",
@@ -793,7 +903,7 @@ def _remote_stream_frames(
     if duration is not None:
         arguments.extend(["--duration", str(duration)])
     process = subprocess.Popen(
-        _ssh_command(host, _remote_shell_command(arguments)),
+        _ssh_command(host, _remote_shell_command(arguments, ray_backend)),
         stdout=subprocess.PIPE,
         stderr=None,
         bufsize=0,
@@ -863,9 +973,14 @@ def render_live(
     supersample: int = 1,
     host: str = DEFAULT_HOST,
     local: bool = True,
+    *,
+    ray_backend: str = "warp",
 ) -> dict[str, object]:
     if local:
-        context = create_renderer(width, height, supersample=supersample, device="cpu")
+        device = "cuda:0" if ray_backend == "optix" else "cpu"
+        context = create_renderer(
+            width, height, supersample=supersample, device=device, ray_backend=ray_backend
+        )
 
         def frames():
             frame_index = 0
@@ -873,23 +988,28 @@ def render_live(
                 yield render_context_frame(context, frame_index / fps)
                 frame_index += 1
 
-        result = display_frames(frames(), width, height, "MuJoCo Warp (local CPU)", target_fps=fps)
-        return {"backend": BACKEND_NAME, "device": "cpu", **result}
+        result = display_frames(
+            frames(), width, height, f"{_backend_name(ray_backend)} ({device})", target_fps=fps
+        )
+        return {"backend": _backend_name(ray_backend), "device": device, **result}
 
-    setup_remote(host)
+    setup_remote(host, ray_backend=ray_backend)
     result = display_frames(
-        _remote_stream_frames(host, width, height, fps, duration, supersample),
+        _remote_stream_frames(
+            host, width, height, fps, duration, supersample, ray_backend=ray_backend
+        ),
         width,
         height,
-        f"MuJoCo Warp (CUDA on {host})",
+        f"{_backend_name(ray_backend)} (CUDA on {host})",
         target_fps=fps,
     )
-    return {"backend": BACKEND_NAME, "host": host, **result}
+    return {"backend": _backend_name(ray_backend), "host": host, **result}
 
 
 def _worker_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("mode", choices=["still", "record", "benchmark", "stream"])
+    parser.add_argument("mode", choices=["still", "record", "benchmark", "stream", "status"])
+    parser.add_argument("--ray-backend", choices=["warp", "optix"], default="warp")
     parser.add_argument("--output")
     parser.add_argument("--width", type=int, default=DEFAULT_WIDTH)
     parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT)
@@ -903,7 +1023,13 @@ def _worker_parser() -> argparse.ArgumentParser:
 
 
 def _worker_stream(args: argparse.Namespace) -> None:
-    context = create_renderer(args.width, args.height, args.supersample, device="cuda:0")
+    context = create_renderer(
+        args.width,
+        args.height,
+        args.supersample,
+        device="cuda:0",
+        ray_backend=args.ray_backend,
+    )
     render_context_frame(context, 0.0)  # JIT and allocate before the binary handshake.
     # Warp writes startup/JIT logs through the text wrapper; drain them before raw bytes.
     sys.stdout.flush()
@@ -932,6 +1058,11 @@ def _worker_stream(args: argparse.Namespace) -> None:
 
 def _worker_main(arguments: list[str]) -> int:
     args = _worker_parser().parse_args(arguments)
+    if args.mode == "status":
+        from robotic_renderers.backends.mujoco_warp_optix import worker_status
+
+        print(RESULT_MAGIC + json.dumps(worker_status(), sort_keys=True), flush=True)
+        return 0
     if args.mode == "stream":
         _worker_stream(args)
         return 0
@@ -945,6 +1076,7 @@ def _worker_main(arguments: list[str]) -> int:
             args.time,
             args.supersample,
             device="cuda:0",
+            ray_backend=args.ray_backend,
         )
     elif args.mode == "record":
         if not args.output or args.duration is None:
@@ -957,6 +1089,7 @@ def _worker_main(arguments: list[str]) -> int:
             args.height,
             args.supersample,
             device="cuda:0",
+            ray_backend=args.ray_backend,
         )
     else:
         result = benchmark_local(
@@ -967,6 +1100,7 @@ def _worker_main(arguments: list[str]) -> int:
             args.warmup,
             args.supersample,
             device="cuda:0",
+            ray_backend=args.ray_backend,
         )
     print(RESULT_MAGIC + json.dumps(result, sort_keys=True), flush=True)
     return 0

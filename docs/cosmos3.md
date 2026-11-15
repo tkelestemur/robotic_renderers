@@ -6,9 +6,9 @@ output is no longer a deterministic rendering-ground-truth product.
 
 ## Remote service
 
-The pinned service uses `nvidia/Cosmos3-Super` (64B), BF16, `vllm==0.28.0`, and a pinned
-vLLM-Omni 0.28.0 release commit. The pair follows Omni's matching-release requirement;
-vLLM 0.29 is not a compatible independent upgrade. It requires a Linux host with at
+The pinned service uses `nvidia/Cosmos3-Super` (64B), BF16, `vllm==0.32.0`, and a pinned
+vLLM-Omni 0.32.0 release commit. The pair follows Omni's matching-release requirement;
+vLLM 0.33 is not a compatible independent upgrade. It requires a Linux host with at
 least four GPUs and selects exactly
 four for this preset. GPUs 0–3 are selected by default; choose a different set before
 invoking the app when the desired cards have other indices:

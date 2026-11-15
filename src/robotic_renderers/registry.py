@@ -19,6 +19,13 @@ _BACKENDS = {
         "samples": False,
         "aovs": False,
     },
+    "warp-optix": {
+        "module": "robotic_renderers.backends.mujoco_warp_optix",
+        "title": "MuJoCo Warp + OptiX",
+        "remote": True,
+        "samples": False,
+        "aovs": False,
+    },
     "blender": {
         "module": "robotic_renderers.backends.blender",
         "title": "Blender Cycles",

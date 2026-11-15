@@ -11,7 +11,7 @@ from robotic_renderers.workflows import cosmos3
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("backend", ("warp", "mitsuba", "ovrtx"))
+@pytest.mark.parametrize("backend", ("warp", "warp-optix", "mitsuba", "ovrtx"))
 def test_shared_runtime_dependencies_match_the_main_lock(backend):
     main = tomllib.loads((ROOT / "uv.lock").read_text())
     remote = tomllib.loads((ROOT / "runtime" / backend / "uv.lock").read_text())

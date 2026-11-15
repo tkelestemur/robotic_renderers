@@ -28,6 +28,7 @@ def test_public_package_exposes_functional_backend_discovery():
     assert robotic_renderers.backend_names() == (
         "opengl",
         "warp",
+        "warp-optix",
         "blender",
         "ovrtx",
         "mitsuba",

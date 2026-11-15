@@ -1,0 +1,26 @@
+[project]
+name = "robotic-renderers-warp-optix-runtime"
+version = "0.1.0"
+description = "Pinned Linux/CUDA runtime for MuJoCo Warp with OptiX traversal"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "imageio==2.38.1",
+  "imageio-ffmpeg==0.8.1",
+  "mujoco==4.0.1",
+  "mujoco-warp==4.0.1",
+  "numpy==2.5.4",
+  "pillow==13.0.0",
+  "usd-core==26.11",
+  "warp-lang==1.19.0",
+  "warp-optix==0.3.0",
+]
+
+[tool.uv]
+package = false
+environments = [
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+[tool.uv.sources]
+# An immutable source archive avoids inheriting upstream's development-only indexes.
+mujoco-warp = { url = "https://github.com/google-deepmind/mujoco_warp/archive/cafb631fbda1ff69ef9db0bd6c6bc57896dc889d.tar.gz" }

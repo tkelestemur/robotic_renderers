@@ -233,6 +233,8 @@ def _backend_command(
         command.extend(("--supersample", str(supersample)))
         if remote_warp:
             command.extend(("--remote-warp", "--host", host))
+    elif backend == "warp-optix":
+        command.extend(("--supersample", str(supersample), "--host", host))
     elif backend == "blender":
         command.extend(("--samples", str(samples)))
     elif backend == "ovrtx":

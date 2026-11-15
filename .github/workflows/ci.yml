@@ -27,9 +27,9 @@ jobs:
           lfs: true
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.3.3
         with:
-          version: "0.12.12"
+          version: "0.13.8"
           enable-cache: true
 
       - name: Install locked environment
@@ -56,9 +56,9 @@ jobs:
       - uses: actions/checkout@v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.3.3
         with:
-          version: "0.12.12"
+          version: "0.13.8"
           enable-cache: true
 
       - name: Build wheel and source distribution
@@ -83,6 +83,7 @@ jobs:
           assert runtimes.joinpath("ovrtx", "uv.lock").is_file()
           assert runtimes.joinpath("mitsuba", "uv.lock").is_file()
           assert runtimes.joinpath("warp", "uv.lock").is_file()
+          assert runtimes.joinpath("warp-optix", "uv.lock").is_file()
           assert scene_summary(160, 90)["camera"] == "evaluation_camera"
           PY
 
@@ -94,7 +95,7 @@ jobs:
             --width 160 --height 90
 
       - name: Upload distributions
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: robotic-renderers-distributions
           path: |

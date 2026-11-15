@@ -27,6 +27,32 @@ uv run robotic-renderers record --backend warp --remote-warp --host render-host 
 
 Supersampling improves final image edges but increases rendering cost quadratically.
 
+## MuJoCo Warp + OptiX
+
+`warp-optix` uses MuJoCo Warp's direct-light renderer with NVIDIA OptiX traversal.
+It runs in an isolated Python 3.12 Linux x86-64 environment on the SSH host:
+
+```bash
+uv run robotic-renderers setup --backend warp-optix --host render-host
+uv run robotic-renderers status --backend warp-optix --host render-host
+uv run robotic-renderers still --backend warp-optix --host render-host \
+  --supersample 2 --output outputs/warp-optix.png
+uv run robotic-renderers live --backend warp-optix --host render-host
+uv run robotic-renderers record --backend warp-optix --host render-host \
+  --duration 0.5 --fps 6 --width 320 --height 180 --supersample 1 \
+  --output outputs/warp-optix.mp4
+uv run robotic-renderers benchmark --backend warp-optix --host render-host --frames 3
+```
+
+The runtime pins `warp-optix==0.3.0` and MuJoCo Warp commit
+`cafb631fbda1ff69ef9db0bd6c6bc57896dc889d`, since published 4.0.1 lacks this API.
+It requires an NVIDIA CUDA/OptiX-capable driver and has no CPU fallback.
+Status checks installed provenance and creates an OptiX context; rendering rejects
+upstream fallback. This backend accepts `--supersample`, not path-tracing `--samples`.
+It is included in `--backend all` and can supply Cosmos RGB conditioning.
+GPU rendering still needs remote validation; local tests cover orchestration and the
+pinned source's ordinary CPU path.
+
 ## Blender
 
 Blender is an external application. The adapter searches `BLENDER_BIN`, `PATH`, and

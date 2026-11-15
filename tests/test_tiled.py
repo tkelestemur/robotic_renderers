@@ -22,9 +22,11 @@ def test_record_parser_accepts_all_backends():
     assert args.keep_components is False
 
 
-def test_tiled_compositor_labels_five_synchronized_videos(tmp_path: Path):
+def test_tiled_compositor_labels_six_synchronized_videos(tmp_path: Path):
     assert tuple(main.BACKEND_MODULES) == BACKEND_ORDER
     assert "Mitsuba" in BACKEND_TITLES["mitsuba"]
+    assert len(BACKEND_ORDER) == 6
+    assert "OptiX" in BACKEND_TITLES["warp-optix"]
 
     paths = {}
     for index, backend in enumerate(BACKEND_ORDER, start=1):
@@ -139,6 +141,13 @@ def test_tiled_worker_commands_route_mode_only_to_ovrtx(tmp_path: Path):
         "--host",
         "render-host",
     ]
+    assert commands["warp-optix"][-4:] == [
+        "--supersample",
+        "3",
+        "--host",
+        "render-host",
+    ]
+    assert "--remote-warp" not in commands["warp-optix"]
     assert all(
         "--render-mode" not in command
         for backend, command in commands.items()

@@ -121,7 +121,7 @@ def _add_render_options(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Render one canonical Franka FR3 scene with five pipelines."
+        description="Render one canonical Franka FR3 scene with six pipelines."
     )
     parser.add_argument("--debug", action="store_true", help=argparse.SUPPRESS)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -172,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     record_parser.add_argument(
         "--keep-components",
         action="store_true",
-        help="Keep the five source MP4s next to an --backend all output",
+        help="Keep the six source MP4s next to an --backend all output",
     )
 
     benchmark_parser = subparsers.add_parser(
@@ -283,7 +283,7 @@ def run_setup(args: argparse.Namespace) -> dict[str, object]:
         if args.remote_warp:
             return module.setup_remote(args.host, force=args.force)
         return module.backend_status()
-    if args.backend in ("ovrtx", "mitsuba"):
+    if args.backend in ("warp-optix", "ovrtx", "mitsuba"):
         return _module(args.backend).setup_remote(args.host, force=args.force)
     return _module(args.backend).backend_status()
 
@@ -298,7 +298,7 @@ def run_still(args: argparse.Namespace) -> dict[str, object]:
             height=args.height,
             time_s=args.time,
         )
-    if args.backend == "warp":
+    if args.backend in ("warp", "warp-optix"):
         return module.render_still(
             output_path=output,
             width=args.width,
@@ -306,7 +306,7 @@ def run_still(args: argparse.Namespace) -> dict[str, object]:
             time_s=args.time,
             supersample=args.supersample,
             host=args.host,
-            local=not args.remote_warp,
+            local=args.backend == "warp" and not args.remote_warp,
         )
     if args.backend == "blender":
         return module.render_still(
@@ -349,7 +349,7 @@ def run_live(args: argparse.Namespace) -> dict[str, object]:
             fps=args.fps,
             duration=args.duration,
         )
-    if args.backend == "warp":
+    if args.backend in ("warp", "warp-optix"):
         return module.render_live(
             width=args.width,
             height=args.height,
@@ -357,7 +357,7 @@ def run_live(args: argparse.Namespace) -> dict[str, object]:
             duration=args.duration,
             supersample=args.supersample,
             host=args.host,
-            local=not args.remote_warp,
+            local=args.backend == "warp" and not args.remote_warp,
         )
     if args.backend == "blender":
         return module.render_live(
@@ -418,7 +418,7 @@ def run_record(args: argparse.Namespace) -> dict[str, object]:
             width=args.width,
             height=args.height,
         )
-    if args.backend == "warp":
+    if args.backend in ("warp", "warp-optix"):
         return module.record_video(
             output_path=output,
             duration=args.duration,
@@ -427,7 +427,7 @@ def run_record(args: argparse.Namespace) -> dict[str, object]:
             height=args.height,
             supersample=args.supersample,
             host=args.host,
-            local=not args.remote_warp,
+            local=args.backend == "warp" and not args.remote_warp,
         )
     if args.backend == "blender":
         return module.record_video(
@@ -475,7 +475,7 @@ def _benchmark_one(backend: str, args: argparse.Namespace) -> dict[str, object]:
             fps=args.fps,
             warmup=args.warmup,
         )
-    if backend == "warp":
+    if backend in ("warp", "warp-optix"):
         return module.benchmark(
             frame_count=args.frames,
             width=args.width,
@@ -484,7 +484,7 @@ def _benchmark_one(backend: str, args: argparse.Namespace) -> dict[str, object]:
             warmup=args.warmup,
             supersample=args.supersample,
             host=args.host,
-            local=not args.remote_warp,
+            local=backend == "warp" and not args.remote_warp,
         )
     if backend == "blender":
         return module.benchmark(
@@ -607,9 +607,9 @@ def _validate_backend_options(args: argparse.Namespace, argv: list[str]) -> None
     options = _explicit_options(argv)
 
     allowed_backends = {
-        "--host": {"warp", "ovrtx", "mitsuba", "all"},
+        "--host": {"warp", "warp-optix", "ovrtx", "mitsuba", "all"},
         "--remote-warp": {"warp", "all"},
-        "--supersample": {"warp", "all"},
+        "--supersample": {"warp", "warp-optix", "all"},
         "--samples": {"blender", "ovrtx", "mitsuba", "all"},
         "--render-mode": {"ovrtx", "all"},
         "--aov": {"ovrtx"},
@@ -632,7 +632,9 @@ def _validate_backend_options(args: argparse.Namespace, argv: list[str]) -> None
     if backend == "warp" and "--host" in options and not args.remote_warp:
         raise ValueError("--host affects Warp only when --remote-warp is enabled")
     if args.command == "setup" and "--force" in options:
-        remote_setup = backend in {"ovrtx", "mitsuba"} or (backend == "warp" and args.remote_warp)
+        remote_setup = backend in {"warp-optix", "ovrtx", "mitsuba"} or (
+            backend == "warp" and args.remote_warp
+        )
         if not remote_setup:
             raise ValueError("--force applies only to remote backend setup")
 

@@ -597,6 +597,7 @@ def test_ovrtx_remote_setup_uses_official_locked_wheels_without_archive_shims():
     assert "--frozen --no-dev" in script
     assert "import ovrtx" in script
     assert "import ovstage" in script
+    assert f'assert ovrtx.__version__ == "{render_ovrtx.OVRTX_VERSION}"' in script
     assert "libOpenGL.so.0" in script
     assert "libopengl0" in script
     assert 'mv "$incoming/source" "$root/source"' in script
@@ -755,18 +756,41 @@ def test_worker_advances_ovstage_time_and_renders_at_the_same_ordinal(monkeypatc
 
 @pytest.mark.parametrize("render_mode", ("PathTracing", "RealTimePathTracing"))
 def test_worker_maps_rgb_and_annotations_by_full_product_path(monkeypatch, render_mode):
+    robot_label = b"class:robot;label:fr3"
+    prop_label = b"class:prop;label:cube"
     arrays = {
         "/Render/Camera/LdrColor": np.full((2, 3, 4), 101, dtype=np.uint8),
         "/Render/Annotations/LdrColor": np.full((2, 3, 4), 202, dtype=np.uint8),
         "/Render/Annotations/DistanceToImagePlaneSD": np.full((2, 3, 1), 2.5),
         "/Render/Annotations/NormalSD": np.full((2, 3, 4), 0.5),
         "/Render/Annotations/DiffuseAlbedoSD": np.full((2, 3, 4), 0.25),
+        "/Render/Annotations/SemanticSegmentation": np.array(
+            [[[0], [7], [8]], [[8], [7], [99]]], dtype=np.uint32
+        ),
+        "/Render/Annotations/SemanticIdMap": {
+            "id": np.array([[7, 0, 0, 0], [8, 0, 0, 0]], dtype=np.uint32),
+            "label_offsets": np.array(
+                [0, len(robot_label), len(robot_label + prop_label)], dtype=np.uint64
+            ),
+            "label_data": np.frombuffer(robot_label + prop_label, dtype=np.uint8).copy(),
+        },
     }
     unmapped = []
     steps = []
 
+    class NamedMapping:
+        def __getitem__(self, name):
+            return SimpleNamespace(array=arrays["/Render/Annotations/SemanticIdMap"][name])
+
+        def unmap(self):
+            for array in arrays["/Render/Annotations/SemanticIdMap"].values():
+                array.fill(0)
+            unmapped.append("/Render/Annotations/SemanticIdMap")
+
     def map_output(path, device):
         assert device == "cpu"
+        if path.endswith("/SemanticIdMap"):
+            return NamedMapping()
 
         def unmap():
             arrays[path].fill(0)
@@ -794,9 +818,11 @@ def test_worker_maps_rgb_and_annotations_by_full_product_path(monkeypatch, rende
         "render_mode": render_mode,
         "render_product": "/Render/Camera",
         "annotation_product": "/Render/Annotations",
-        "aovs": ["depth", "normals", "albedo"],
+        "aovs": ["depth", "normals", "albedo", "semantic", "instance"],
         "annotation_render_vars": list(
-            render_ovrtx._requested_render_vars(("depth", "normals", "albedo"))
+            render_ovrtx._requested_render_vars(
+                ("depth", "normals", "albedo", "semantic", "instance")
+            )
         ),
     }
     renderer = SimpleNamespace(step=step, update_from_usd_time=lambda time: None)
@@ -807,8 +833,56 @@ def test_worker_maps_rgb_and_annotations_by_full_product_path(monkeypatch, rende
     np.testing.assert_array_equal(result["depth"], np.full((2, 3), 2.5))
     np.testing.assert_array_equal(result["normals"], np.full((2, 3, 3), 0.5))
     np.testing.assert_array_equal(result["albedo"], np.full((2, 3, 3), 0.25))
+    np.testing.assert_array_equal(result["semantic"], [[0, 2, 1], [1, 2, 0]])
+    np.testing.assert_array_equal(result["instance"], [[0, 2, 1], [1, 2, 0]])
+    assert result["_labels"] == {
+        "semantic": {"0": "unlabeled", "1": "prop", "2": "robot"},
+        "instance": {"0": "unlabeled", "1": "cube", "2": "fr3"},
+    }
     assert set(unmapped) == set(arrays)
     assert steps == [("/Render/Camera", 1 / 24), ("/Render/Annotations", 1 / 24)]
+
+
+def test_semantic_id_map_decodes_strided_utf8_spans_and_empty_rows():
+    label = "class:robot;label:fränka\x00".encode()
+    storage = np.zeros(len(label) * 2, dtype=np.uint8)
+    storage[::2] = np.frombuffer(label, dtype=np.uint8)
+    tensors = {
+        "id": np.array([[0, 0, 0, 0, 0], [7, 0, 0, 0, 0]], dtype=np.uint32)[:, :4],
+        "label_offsets": np.array([0, 0, 0, 0, len(label), 0], dtype=np.uint64)[::2],
+        "label_data": storage[::2],
+    }
+    assert render_ovrtx._decode_semantic_id_map(tensors) == {
+        0: "",
+        7: "class:robot;label:fränka\x00",
+    }
+    tensors["id"] = np.empty((0, 4), dtype=np.uint32)
+    tensors["label_offsets"] = np.array([0], dtype=np.uint64)
+    tensors["label_data"] = np.empty(0, dtype=np.uint8)
+    assert render_ovrtx._decode_semantic_id_map(tensors) == {}
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("id", np.array([[2, 1, 0, 0]], dtype=np.uint32)),
+        ("id", np.array([2, 0, 0, 0], dtype=np.uint32)),
+        ("label_offsets", np.array([1, 1], dtype=np.uint64)),
+        ("label_offsets", np.array([0, 2], dtype=np.uint64)),
+        ("label_offsets", np.array([0], dtype=np.uint64)),
+        ("label_offsets", np.array([0, 1], dtype=np.uint32)),
+        ("label_data", np.array([65], dtype=np.uint32)),
+    ],
+)
+def test_semantic_id_map_rejects_invalid_named_fields(field, value):
+    tensors = {
+        "id": np.array([[2, 0, 0, 0]], dtype=np.uint32),
+        "label_offsets": np.array([0, 1], dtype=np.uint64),
+        "label_data": np.array([65], dtype=np.uint8),
+    }
+    tensors[field] = value
+    with pytest.raises(RuntimeError, match="SemanticIdMap"):
+        render_ovrtx._decode_semantic_id_map(tensors)
 
 
 def test_malformed_handshake_does_not_block_and_reaps_stubborn_ssh(monkeypatch):

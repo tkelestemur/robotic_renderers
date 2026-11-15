@@ -24,6 +24,7 @@ in the canonical scene. Translators convert their intensities to each renderer's
 | --- | --- |
 | MuJoCo OpenGL | Phong rasterization with shadows, reflection, skybox, haze, and MSAA. A documented output gamma lifts its shadow-heavy framebuffer response without changing authored lights. |
 | MuJoCo Warp | Direct-light ray rendering with textures, shadows, ambient/direct lighting, sky, specular response, and configurable supersampling. It does not provide multibounce global illumination. |
+| MuJoCo Warp + OptiX | The same Warp shading, 0.42 exposure scale, checker correction, and supersampling, using OptiX traversal. No standalone warp-optix path tracer or additional transport effects. |
 | Blender | Cycles path tracing for final output and an interactive viewport for live use. Canonical directional/point/spot lights map to Blender Sun/Point/Spot lights. AgX and a fixed exposure offset match the common perceived level. |
 | ovrtx | Explicit `pathtraced` and `realtime` modes. Path-traced RGB remains the final color product when synchronized real-time AOVs are requested. Physical camera exposure and renderer-unit light conversion are fixed in the exporter. |
 | Mitsuba | CUDA/OptiX path tracing with multiple importance sampling, 12-bounce transport, AOV-guided denoising, and a fixed filmic tone response. |
@@ -42,6 +43,13 @@ not a scene-content change.
 
 These are rendering-pipeline differences. Do not tune quality by changing object
 placement, tile cadence, camera motion, lens, or light layout in only one backend.
+
+The OptiX integration currently requires a newer MuJoCo Warp source revision than
+the regular Warp backend's released wheel; this version difference should accompany
+comparisons. Upstream does not yet support flexes, splats, or CUDA graph capture for
+OptiX launches. Unsupported scenes/devices must fail rather than silently enter the
+ordinary Warp path. Near-coincident surface hit ordering can differ between traversal
+backends. The canonical scene and analytical trajectory are shared unchanged.
 
 ## AOV synchronization
 

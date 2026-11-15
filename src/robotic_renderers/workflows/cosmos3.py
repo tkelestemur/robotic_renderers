@@ -39,8 +39,8 @@ DEFAULT_MODEL_REVISION = os.environ.get(
     "ROBOT_RENDERING_COSMOS_MODEL_REVISION",
     "e0262be9d8f7586bc24c069a2aed2b665bdff266",
 )
-VLLM_VERSION = "0.28.0"
-VLLM_OMNI_COMMIT = "eb11446b7f2e30ca582f8aff3afe12e9a2e66f6c"
+VLLM_VERSION = "0.32.0"
+VLLM_OMNI_COMMIT = "5917730a4b02aedb44d374173cdc1b10484ccd52"
 REMOTE_ROOT = "code/robot_rendering_cosmos3"
 DEFAULT_PORT = 8091
 
@@ -696,7 +696,7 @@ def _render_source_still(
             height=height,
             time_s=0.0,
         )
-    if backend == "warp":
+    if backend in ("warp", "warp-optix"):
         return module.render_still(
             output_path=output,
             width=width,
@@ -704,7 +704,7 @@ def _render_source_still(
             time_s=0.0,
             supersample=2,
             host=host,
-            local=True,
+            local=backend == "warp",
         )
     if backend == "blender":
         return module.render_still(
@@ -744,7 +744,7 @@ def _render_source_video(
             width=width,
             height=height,
         )
-    if backend == "warp":
+    if backend in ("warp", "warp-optix"):
         return module.record_video(
             output_path=output,
             duration=duration,
@@ -753,7 +753,7 @@ def _render_source_video(
             height=height,
             supersample=2,
             host=host,
-            local=True,
+            local=backend == "warp",
         )
     if backend == "blender":
         return module.record_video(

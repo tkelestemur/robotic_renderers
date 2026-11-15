@@ -5,7 +5,7 @@ import pytest
 
 from robotic_renderers import cli
 
-EXPECTED_BACKENDS = ("opengl", "warp", "blender", "ovrtx", "mitsuba")
+EXPECTED_BACKENDS = ("opengl", "warp", "warp-optix", "blender", "ovrtx", "mitsuba")
 
 
 def _recording_function(calls, name, result=None):
@@ -16,7 +16,7 @@ def _recording_function(calls, name, result=None):
     return record
 
 
-def test_status_probes_all_five_backends(monkeypatch):
+def test_status_probes_all_six_backends(monkeypatch):
     calls = []
     modules = {
         backend: SimpleNamespace(
@@ -37,6 +37,7 @@ def test_status_probes_all_five_backends(monkeypatch):
     assert calls == [
         ("opengl", (), {}),
         ("warp", ("render-host",), {}),
+        ("warp-optix", ("render-host",), {}),
         ("blender", (), {}),
         ("ovrtx", ("render-host",), {}),
         ("mitsuba", ("render-host",), {}),
@@ -47,6 +48,7 @@ def test_registry_uses_installable_package_module_paths():
     assert cli.BACKEND_MODULES == {
         "opengl": "robotic_renderers.backends.mujoco_opengl",
         "warp": "robotic_renderers.backends.mujoco_warp",
+        "warp-optix": "robotic_renderers.backends.mujoco_warp_optix",
         "blender": "robotic_renderers.backends.blender",
         "ovrtx": "robotic_renderers.backends.ovrtx",
         "mitsuba": "robotic_renderers.backends.mitsuba",
@@ -131,12 +133,13 @@ def test_status_can_probe_one_backend_and_forward_host(monkeypatch):
     assert calls == [("mitsuba", ("render-host",), {})]
 
 
-def test_mitsuba_setup_uses_remote_host_and_force(monkeypatch):
+@pytest.mark.parametrize("backend", ("mitsuba", "warp-optix"))
+def test_remote_setup_uses_remote_host_and_force(monkeypatch, backend):
     calls = []
     module = SimpleNamespace(setup_remote=_recording_function(calls, "setup"))
     monkeypatch.setattr(cli, "_module", lambda backend: module)
     args = cli.build_parser().parse_args(
-        ["setup", "--backend", "mitsuba", "--host", "render-host", "--force"]
+        ["setup", "--backend", backend, "--host", "render-host", "--force"]
     )
 
     cli.run_setup(args)
@@ -308,6 +311,8 @@ def test_mitsuba_render_commands_forward_supported_remote_options(
         ["still", "--backend", "opengl", "--samples", "8"],
         ["still", "--backend", "opengl", "--supersample", "2"],
         ["still", "--backend", "warp", "--host", "render-host"],
+        ["still", "--backend", "warp-optix", "--samples", "8"],
+        ["record", "--backend", "warp-optix", "--remote-warp"],
         ["record", "--backend", "mitsuba", "--keep-frames"],
         ["record", "--backend", "blender", "--keep-components"],
         [
@@ -504,3 +509,5 @@ def test_benchmark_keeps_partial_all_backend_results(monkeypatch):
     assert result["success"] is True
     assert result["partial"] is True
     assert result["failed_backends"] == ["mitsuba"]
+    assert tuple(result["results"]) == EXPECTED_BACKENDS
+    assert result["results"]["warp-optix"] == {"backend": "warp-optix"}
